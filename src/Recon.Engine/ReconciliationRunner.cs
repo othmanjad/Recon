@@ -317,7 +317,11 @@ public sealed class ReconciliationRunner(
             }
 
             outcomes.Add(new ControlTotalOutcome(
-                check.CheckCode, check.DisplayName, a, b, balanced, check.FailRunOnMismatch));
+                check.CheckCode, check.DisplayName, a, b, balanced, check.FailRunOnMismatch,
+                // The aggregate function is what says whether these numbers
+                // are money or a row count. Without it the CLI printed 15
+                // matched rows as "0.015 JOD".
+                IsAmount: check.SourceA.Function == "SumAmount"));
         }
 
         if (!step.AlreadyCompleted)
@@ -414,7 +418,8 @@ public sealed record ControlTotalOutcome(
     long ValueA,
     long ValueB,
     bool IsBalanced,
-    bool FailsRun)
+    bool FailsRun,
+    bool IsAmount)
 {
     public long Difference => ValueA - ValueB;
 }

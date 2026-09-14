@@ -63,13 +63,13 @@ public sealed class ReconciliationRunner(
                 var dataset = definition.DatasetFor(side);
 
                 await RunStepAsync(
-                    run.RunId, RunStepName.Exclude, null,
+                    run.RunId, RunStepName.Exclude, null, side,
                     () => SqlQueryBuilderLifecycle.CompileExclusions(
                         dataset, definition.Exclusions, run.StagingRunId, windowFrom, windowTo),
                     cancellationToken).ConfigureAwait(false);
 
                 await RunStepAsync(
-                    run.RunId, RunStepName.Duplicates, null,
+                    run.RunId, RunStepName.Duplicates, null, side,
                     () => SqlQueryBuilderLifecycle.CompileDuplicateDetection(
                         dataset, run.StagingRunId, windowFrom, windowTo),
                     cancellationToken).ConfigureAwait(false);
@@ -81,8 +81,8 @@ public sealed class ReconciliationRunner(
                 cancellationToken.ThrowIfCancellationRequested();
 
                 var step = await _runs.BeginStepAsync(
-                    run.RunId, RunStepName.Match, rule.MatchRuleId, cancellationToken)
-                    .ConfigureAwait(false);
+                    run.RunId, RunStepName.Match, rule.MatchRuleId,
+                    side: null, cancellationToken).ConfigureAwait(false);
 
                 if (step.AlreadyCompleted)
                 {
@@ -137,7 +137,7 @@ public sealed class ReconciliationRunner(
 
             // ---- after the last pass -------------------------------------
             await RunStepAsync(
-                run.RunId, RunStepName.Stage, null,
+                run.RunId, RunStepName.Stage, null, null,
                 () => SqlQueryBuilderLifecycle.CompileFinalizeStaging(
                     definition, run.RunId, run.StagingRunId, windowFrom, windowTo),
                 cancellationToken).ConfigureAwait(false);
@@ -145,7 +145,7 @@ public sealed class ReconciliationRunner(
             foreach (var side in new[] { Side.Left, Side.Right })
             {
                 await RunStepAsync(
-                    run.RunId, RunStepName.Classify, null,
+                    run.RunId, RunStepName.Classify, null, side,
                     () => SqlQueryBuilderLifecycle.CompileClassification(
                         definition, side, run.RunId, run.StagingRunId,
                         run.BusinessDate, windowFrom, windowTo),
@@ -153,7 +153,7 @@ public sealed class ReconciliationRunner(
             }
 
             await RunStepAsync(
-                run.RunId, RunStepName.Aggregate, null,
+                run.RunId, RunStepName.Aggregate, null, null,
                 () => RunAggregateBuilder.Compile(
                     definition, run.RunId, run.StagingRunId,
                     run.BusinessDate, windowFrom, windowTo),
@@ -192,10 +192,11 @@ public sealed class ReconciliationRunner(
         long runId,
         RunStepName stepName,
         int? matchRuleId,
+        Side? side,
         Func<CompiledStatement> compile,
         CancellationToken cancellationToken)
     {
-        var step = await _runs.BeginStepAsync(runId, stepName, matchRuleId, cancellationToken)
+        var step = await _runs.BeginStepAsync(runId, stepName, matchRuleId, side, cancellationToken)
             .ConfigureAwait(false);
 
         if (step.AlreadyCompleted)
@@ -287,7 +288,8 @@ public sealed class ReconciliationRunner(
         var outcomes = new List<ControlTotalOutcome>();
 
         var step = await _runs.BeginStepAsync(
-            run.RunId, RunStepName.ControlTotals, null, cancellationToken).ConfigureAwait(false);
+            run.RunId, RunStepName.ControlTotals, null, null, cancellationToken)
+            .ConfigureAwait(false);
 
         foreach (var check in definition.ControlTotals.Where(c => c.IsActive))
         {

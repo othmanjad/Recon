@@ -404,3 +404,168 @@ public class SqlQueryBuilderSafetyTests
         Assert.DoesNotContain("CAST(L.Num1 AS DECIMAL", statement.Sql, StringComparison.Ordinal);
     }
 }
+
+/// <summary>
+/// Regression tests for defects that only appeared when the engine ran against
+/// a real server. Each is here so the same mistake cannot return silently.
+/// </summary>
+public class PassWorkingSetTests
+{
+    private static PassContext Context(ReconciliationDefinition definition, MatchRule rule) => new()
+    {
+        Definition = definition,
+        Rule = rule,
+        RunId = 1,
+        StagingRunId = 1,
+        BusinessDate = new DateOnly(2026, 9, 13),
+        WindowFrom = new DateOnly(2026, 9, 12),
+        WindowTo = new DateOnly(2026, 9, 14),
+    };
+
+    [Fact]
+    public void APassSeesOnlyRowsStillInTheWorkingSet()
+    {
+        // Exclusions and duplicate detection run before pass 1 and mark rows
+        // Excluded and Duplicate. The design says those rows never enter
+        // matching — and until this clause existed, they did: a file with the
+        // same reference twice joined both left rows to one right row, and a
+        // clean match came out Ambiguous.
+        var definition = Fixtures.CliqOm();
+        var statement = SqlQueryBuilder.CompileRowPass(Context(definition, definition.Rules[0]));
+
+        Assert.Contains("L.MatchStatus = 'Unmatched'", statement.Sql, StringComparison.Ordinal);
+        Assert.Contains("R.MatchStatus = 'Unmatched'", statement.Sql, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AnAggregatePassSeesOnlyRowsStillInTheWorkingSet()
+    {
+        var definition = Fixtures.CliqOm();
+        var rule = definition.Rules[0] with
+        {
+            MatchRuleId = 80,
+            RuleCode = "AGG",
+            Mode = MatchMode.Aggregate,
+            LeftGroupByFields = ["DIRECTION"],
+            AggregateFunction = "SumAndCount",
+            Conditions =
+            [
+                new MatchCondition
+                {
+                    MatchConditionId = 80,
+                    LeftFieldCode = "AMOUNT",
+                    RightFieldCode = "AMOUNT_MINOR",
+                    Comparison = ComparisonType.NumericExact,
+                },
+            ],
+        };
+
+        var statement = SqlQueryBuilderAggregate.CompileAggregatePass(Context(definition, rule));
+
+        Assert.Contains("L.MatchStatus = 'Unmatched'", statement.Sql, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AggregateModeGroupsAndSumsTheAmountRoleField()
+    {
+        var definition = Fixtures.CliqOm();
+        var rule = definition.Rules[0] with
+        {
+            MatchRuleId = 81,
+            RuleCode = "AGG2",
+            Mode = MatchMode.Aggregate,
+            LeftGroupByFields = ["DIRECTION"],
+            AggregateFunction = "SumAndCount",
+            Conditions =
+            [
+                new MatchCondition
+                {
+                    MatchConditionId = 81,
+                    LeftFieldCode = "AMOUNT",
+                    RightFieldCode = "AMOUNT_MINOR",
+                    Comparison = ComparisonType.NumericExact,
+                },
+            ],
+        };
+
+        var statement = SqlQueryBuilderAggregate.CompileAggregatePass(Context(definition, rule));
+
+        // The group key is the Direction slot, the sum is the Amount slot, and
+        // the Amount pair compares the SUM to the reported total — which is
+        // what makes "one summary line ↔ many transactions" an ordinary rule.
+        Assert.Contains("GROUP BY L.Text6", statement.Sql, StringComparison.Ordinal);
+        Assert.Contains("SUM(CAST(L.Num1 AS BIGINT))", statement.Sql, StringComparison.Ordinal);
+        Assert.Contains("G.AmountMinorSum = R.Num1", statement.Sql, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AnAggregateRuleWithNoGroupingIsRejected()
+    {
+        var definition = Fixtures.CliqOm();
+        var rule = definition.Rules[0] with { Mode = MatchMode.Aggregate, LeftGroupByFields = [] };
+
+        var ex = Assert.Throws<SqlCompilationException>(
+            () => SqlQueryBuilderAggregate.CompileAggregatePass(Context(definition, rule)));
+
+        Assert.Contains("sum the whole dataset by accident", ex.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AggregateModeRejectsAComparisonThatCannotApplyToATotal()
+    {
+        var definition = Fixtures.CliqOm();
+        var rule = definition.Rules[0] with
+        {
+            Mode = MatchMode.Aggregate,
+            LeftGroupByFields = ["DIRECTION"],
+            AggregateFunction = "SumAndCount",
+            Conditions =
+            [
+                definition.Rules[0].Conditions[0] with { Comparison = ComparisonType.Contains },
+            ],
+        };
+
+        // A grouped total cannot be substring-matched, and pretending otherwise
+        // would produce SQL that runs and means nothing.
+        Assert.Throws<SqlCompilationException>(
+            () => SqlQueryBuilderAggregate.CompileAggregatePass(Context(definition, rule)));
+    }
+
+    [Fact]
+    public void FinalizeStagingStampsTheRunThatProducedTheStatus()
+    {
+        // Review finding 1: without ResultRunId a Rematch overwrites the source
+        // run's row-level results while claiming they survive.
+        var statement = SqlQueryBuilderLifecycle.CompileFinalizeStaging(
+            Fixtures.CliqOm(), runId: 4472, stagingRunId: 4468,
+            new DateOnly(2026, 9, 12), new DateOnly(2026, 9, 14));
+
+        Assert.Contains("ResultRunId = @RunId", statement.Sql, StringComparison.Ordinal);
+        // And it must not clobber the statuses set before matching.
+        Assert.Contains("NOT IN ('Excluded','Duplicate')", statement.Sql, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void DuplicateDetectionKeepsTheEarliestOccurrence()
+    {
+        var statement = SqlQueryBuilderLifecycle.CompileDuplicateDetection(
+            Fixtures.CliqSession(), stagingRunId: 1,
+            new DateOnly(2026, 9, 12), new DateOnly(2026, 9, 14));
+
+        // Ordering by the source row number means the row flagged is the later
+        // arrival in the file, not an arbitrary one.
+        Assert.Contains("ORDER BY S.RawRowNumber", statement.Sql, StringComparison.Ordinal);
+        Assert.Contains("r.rn > 1", statement.Sql, StringComparison.Ordinal);
+        Assert.Contains("'Duplicate'", statement.Sql, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ADatasetWithNoDeclaredKeyGeneratesNoDuplicateDetection()
+    {
+        var statement = SqlQueryBuilderLifecycle.CompileDuplicateDetection(
+            Fixtures.OrangeMoney(), stagingRunId: 1,
+            new DateOnly(2026, 9, 12), new DateOnly(2026, 9, 14));
+
+        Assert.DoesNotContain("UPDATE", statement.Sql, StringComparison.Ordinal);
+    }
+}

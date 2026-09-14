@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Recon.Domain.Conditions;
@@ -225,7 +226,8 @@ public static class SqlQueryBuilder
         long stagingRunId,
         DateOnly windowFrom,
         DateOnly windowTo,
-        SqlParameterBag parameters)
+        SqlParameterBag parameters,
+        bool matchableOnly = false)
     {
         ArgumentNullException.ThrowIfNull(parameters);
 
@@ -234,8 +236,29 @@ public static class SqlQueryBuilder
         var from = parameters.Add(windowFrom.ToDateTime(TimeOnly.MinValue));
         var to = parameters.Add(windowTo.ToDateTime(TimeOnly.MinValue));
 
-        return $"{alias}.DatasetId = {ds} AND {alias}.LoadRunId = {run} " +
-               $"AND {alias}.TxDate >= {from} AND {alias}.TxDate <= {to}";
+        var predicate = $"{alias}.DatasetId = {ds} AND {alias}.LoadRunId = {run} " +
+                        $"AND {alias}.TxDate >= {from} AND {alias}.TxDate <= {to}";
+
+        if (!matchableOnly)
+        {
+            return predicate;
+        }
+
+        /* FIX (found by execution): a pass must see only rows still in the
+           working set.
+
+           Exclusions and duplicate detection run before pass 1 and mark rows
+           'Excluded' and 'Duplicate'; the design says those rows never enter
+           matching. Without this clause they did. A file containing the same
+           reference twice then joined BOTH left rows to the single right row,
+           the right side counted two candidates, and a clean match became
+           Ambiguous — which is precisely the outcome duplicate detection
+           exists to prevent.
+
+           'Unmatched' rather than NOT IN ('Excluded','Duplicate') because
+           those are the only other values present during matching: staging's
+           status is written once, at the end of the run. */
+        return predicate + $" AND {alias}.MatchStatus = 'Unmatched'";
     }
 
     // =================================================================
@@ -291,9 +314,9 @@ public static class SqlQueryBuilder
         var businessDate = p.Add("@BusinessDate", ctx.BusinessDate.ToDateTime(TimeOnly.MinValue));
 
         var leftRange = StagingRange("L", ctx.Definition.Left.DatasetId, ctx.StagingRunId,
-            ctx.WindowFrom, ctx.WindowTo, p);
+            ctx.WindowFrom, ctx.WindowTo, p, matchableOnly: true);
         var rightRange = StagingRange("R", ctx.Definition.Right.DatasetId, ctx.StagingRunId,
-            ctx.WindowFrom, ctx.WindowTo, p);
+            ctx.WindowFrom, ctx.WindowTo, p, matchableOnly: true);
 
         var leftFilter = CompileCondition(rule.LeftFilter, ctx.Definition.Left, "L", p);
         var rightFilter = CompileCondition(rule.RightFilter, ctx.Definition.Right, "R", p);
@@ -325,9 +348,9 @@ public static class SqlQueryBuilder
         // Anti-join: rows already matched by an earlier pass of THIS run are
         // out of the working set. Supported by IX_MatchResult_RunLeft/Right.
         sql.AppendLine("  AND NOT EXISTS (SELECT 1 FROM ops.MatchResult AS M");
-        sql.AppendLine($"                  WHERE M.RunId = {runId} AND M.LeftStagingId = L.StagingId)");
+        sql.AppendLine(CultureInfo.InvariantCulture, $"                  WHERE M.RunId = {runId} AND M.LeftStagingId = L.StagingId)");
         sql.AppendLine("  AND NOT EXISTS (SELECT 1 FROM ops.MatchResult AS M");
-        sql.AppendLine($"                  WHERE M.RunId = {runId} AND M.RightStagingId = R.StagingId);");
+        sql.AppendLine(CultureInfo.InvariantCulture, $"                  WHERE M.RunId = {runId} AND M.RightStagingId = R.StagingId);");
         sql.AppendLine();
 
         AppendResolution(sql, rule, runId, ruleId, businessDate);
@@ -370,7 +393,7 @@ public static class SqlQueryBuilder
         sql.AppendLine("    (RunId, BusinessDate, LeftStagingId, RightStagingId, MatchRuleId,");
         sql.AppendLine("     MatchStatus, AmountDiffMinor, CandidateCount)");
         sql.AppendLine("SELECT");
-        sql.AppendLine($"    {runId}, {businessDate}, c.LeftStagingId, c.RightStagingId, {ruleId},");
+        sql.AppendLine(CultureInfo.InvariantCulture, $"    {runId}, {businessDate}, c.LeftStagingId, c.RightStagingId, {ruleId},");
 
         switch (rule.OnMultipleMatch)
         {

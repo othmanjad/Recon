@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using Recon.Domain.Configuration;
 using Recon.Engine.Sql;
@@ -42,7 +43,7 @@ public static class RunAggregateBuilder
         sql.AppendLine("SET NOCOUNT ON;");
         // Idempotent: a resumed run rewrites its own aggregates rather than
         // doubling them, which the UNIQUE constraint would refuse anyway.
-        sql.AppendLine($"DELETE ops.RunAggregate WHERE RunId = {run};");
+        sql.AppendLine(CultureInfo.InvariantCulture, $"DELETE ops.RunAggregate WHERE RunId = {run};");
 
         foreach (var side in new[] { Side.Left, Side.Right })
         {
@@ -68,24 +69,24 @@ public static class RunAggregateBuilder
             var direction = dataset.FieldWithRole(FieldRole.Direction);
 
             sql.AppendLine();
-            sql.AppendLine($"/* {side}: {dataset.Code} — whole dataset, by status */");
+            sql.AppendLine(CultureInfo.InvariantCulture, $"/* {side}: {dataset.Code} — whole dataset, by status */");
             sql.AppendLine("INSERT ops.RunAggregate");
             sql.AppendLine("    (RunId, DefinitionId, BusinessDate, DatasetId, Side,");
             sql.AppendLine("     GroupKey, MatchStatus, RowCnt, AmountMinorSum, CurrencyCode)");
             sql.AppendLine("SELECT");
-            sql.AppendLine($"    {run}, {def}, {bd}, {datasetId}, {sideName},");
+            sql.AppendLine(CultureInfo.InvariantCulture, $"    {run}, {def}, {bd}, {datasetId}, {sideName},");
             sql.AppendLine("    N'*', S.MatchStatus, COUNT_BIG(*), " + amountSum + ", " + currencyColumn);
             sql.AppendLine("FROM stg.StagingTransaction AS S");
             sql.AppendLine("WHERE " + range);
             sql.AppendLine("GROUP BY S.MatchStatus, " + currencyColumn + ";");
 
             sql.AppendLine();
-            sql.AppendLine($"/* {side}: {dataset.Code} — whole dataset, all statuses */");
+            sql.AppendLine(CultureInfo.InvariantCulture, $"/* {side}: {dataset.Code} — whole dataset, all statuses */");
             sql.AppendLine("INSERT ops.RunAggregate");
             sql.AppendLine("    (RunId, DefinitionId, BusinessDate, DatasetId, Side,");
             sql.AppendLine("     GroupKey, MatchStatus, RowCnt, AmountMinorSum, CurrencyCode)");
             sql.AppendLine("SELECT");
-            sql.AppendLine($"    {run}, {def}, {bd}, {datasetId}, {sideName},");
+            sql.AppendLine(CultureInfo.InvariantCulture, $"    {run}, {def}, {bd}, {datasetId}, {sideName},");
             sql.AppendLine("    N'*', N'*', COUNT_BIG(*), " + amountSum + ", " + currencyColumn);
             sql.AppendLine("FROM stg.StagingTransaction AS S");
             sql.AppendLine("WHERE " + range);
@@ -97,17 +98,18 @@ public static class RunAggregateBuilder
                     dataset, direction.FieldCode, requireMatchable: false);
 
                 sql.AppendLine();
-                sql.AppendLine($"/* {side}: {dataset.Code} — by direction and status */");
+                sql.AppendLine(CultureInfo.InvariantCulture, $"/* {side}: {dataset.Code} — by direction and status */");
                 sql.AppendLine("INSERT ops.RunAggregate");
                 sql.AppendLine("    (RunId, DefinitionId, BusinessDate, DatasetId, Side,");
                 sql.AppendLine("     GroupKey, MatchStatus, RowCnt, AmountMinorSum, CurrencyCode)");
                 sql.AppendLine("SELECT");
-                sql.AppendLine($"    {run}, {def}, {bd}, {datasetId}, {sideName},");
-                sql.AppendLine($"    N'Direction=' + ISNULL(CAST(S.{directionSlot} AS NVARCHAR(100)), N'(none)'),");
+                sql.AppendLine(CultureInfo.InvariantCulture, $"    {run}, {def}, {bd}, {datasetId}, {sideName},");
+                sql.AppendLine(CultureInfo.InvariantCulture, $"    N'Direction=' + ISNULL(CAST(S.{directionSlot} AS NVARCHAR(100)), N'(none)'),");
                 sql.AppendLine("    S.MatchStatus, COUNT_BIG(*), " + amountSum + ", " + currencyColumn);
                 sql.AppendLine("FROM stg.StagingTransaction AS S");
                 sql.AppendLine("WHERE " + range);
-                sql.AppendLine($"GROUP BY S.{directionSlot}, S.MatchStatus, " + currencyColumn + ";");
+                sql.AppendLine(CultureInfo.InvariantCulture,
+                    $"GROUP BY S.{directionSlot}, S.MatchStatus, {currencyColumn};");
             }
         }
 

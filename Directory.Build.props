@@ -7,6 +7,11 @@
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <AnalysisLevel>latest-recommended</AnalysisLevel>
-    <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- Invariant globalization mode is NOT enabled: Microsoft.Data.SqlClient
+         does not support it and throws at the first connection. Culture
+         sensitivity is handled where it belongs instead — every parse and
+         format in the engine passes CultureInfo.InvariantCulture explicitly,
+         so a server with a Turkish or Arabic locale reads the same numbers and
+         dates as one with an English locale. -->
   </PropertyGroup>
 </Project>

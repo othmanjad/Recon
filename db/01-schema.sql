@@ -484,6 +484,17 @@ CREATE TABLE cfg.MatchCondition (
     ComparisonType      VARCHAR(30) NOT NULL,
     ToleranceValue      BIGINT NULL,                -- minor units, or numeric span
     ToleranceUnit       VARCHAR(20) NULL,           -- MinorUnit|Minute|Hour|Day
+    /* Compare the parse-time normalized companions rather than the raw fields.
+
+       FIX (found by execution): this was not modelled at all, so the engine
+       inferred it from the fields — "both sides have a companion, therefore
+       compare the companions". That silently turned pass 1, the clean
+       reference match, into a second normalized pass: every condition on a
+       normalizable field used the companion whether the rule asked or not.
+       Whether to normalize is the rule's intent, not a property of the
+       fields, and the portal's rule builder already offered it as a
+       per-condition switch. */
+    UseNormalized       BIT NOT NULL DEFAULT 0,
     Sequence            INT NOT NULL DEFAULT 1,
     CONSTRAINT CK_MatchCondition_Cmp CHECK
 (ComparisonType COLLATE Latin1_General_CS_AS IN
@@ -852,6 +863,18 @@ CREATE TABLE ops.ReconRunStep (
     RunId               BIGINT NOT NULL REFERENCES ops.ReconRun(RunId),
     StepName            VARCHAR(40) NOT NULL,
     MatchRuleId         INT NULL REFERENCES cfg.MatchRule(MatchRuleId),
+    /* Which side the step ran against, for the stages that run once per
+       dataset: Exclude, Duplicates and Classify.
+
+       FIX (found by execution): without this a step's identity was
+       (RunId, StepName, MatchRuleId), so "Classify Left" and "Classify
+       Right" were the same checkpoint. The second call found the first
+       Completed and skipped it — correctly, by the resume logic's own rules —
+       so the right side's exclusions, duplicate detection and classification
+       never ran at all. A silent half-reconciliation, produced by a
+       checkpoint design that was right about everything except what
+       identifies a step. */
+    Side                VARCHAR(10) NULL,
     Status              VARCHAR(20) NOT NULL,
     StartedAt           DATETIME2(3) NULL,
     CompletedAt         DATETIME2(3) NULL,
@@ -868,10 +891,20 @@ CREATE TABLE ops.ReconRunStep (
          'Classify','AutoClose','ControlTotals','Aggregate','Fees','Report')),
     CONSTRAINT CK_RunStep_Status CHECK
 (Status COLLATE Latin1_General_CS_AS IN
- ('Pending','Running','Completed','Failed','Skipped'))
+ ('Pending','Running','Completed','Failed','Skipped')),
+    CONSTRAINT CK_RunStep_Side CHECK
+        (Side IS NULL OR Side COLLATE Latin1_General_CS_AS IN ('Left','Right'))
 );
 GO
 CREATE INDEX IX_ReconRunStep_Run ON ops.ReconRunStep (RunId, StepName);
+GO
+/* A step is identified by run, name, rule and side. Making that a UNIQUE
+   index rather than a convention means a second attempt at a step cannot
+   create a duplicate row and then resume from whichever one it read first.
+   NULLs compare equal in a unique index, which is exactly right here: there
+   is one Aggregate step per run, not one per NULL. */
+CREATE UNIQUE INDEX UX_ReconRunStep_Identity
+    ON ops.ReconRunStep (RunId, StepName, MatchRuleId, Side);
 GO
 
 CREATE TABLE ops.SourceFile (

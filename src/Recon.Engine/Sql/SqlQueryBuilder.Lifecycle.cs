@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using Recon.Domain.Configuration;
 
@@ -178,9 +179,9 @@ public static class SqlQueryBuilderLifecycle
             var otherColumn = side == Side.Left ? "RightStagingId" : "LeftStagingId";
 
             sql.AppendLine();
-            sql.AppendLine($"/* {side} side: {dataset.Code} */");
+            sql.AppendLine(CultureInfo.InvariantCulture, $"/* {side} side: {dataset.Code} */");
             sql.AppendLine("UPDATE S SET");
-            sql.AppendLine($"    ResultRunId = {run},");
+            sql.AppendLine(CultureInfo.InvariantCulture, $"    ResultRunId = {run},");
             // A row with several results (an Ambiguous pass) takes the worst
             // outcome, not whichever the engine happened to read last.
             sql.AppendLine("    MatchStatus = CASE");
@@ -194,10 +195,10 @@ public static class SqlQueryBuilderLifecycle
             sql.AppendLine("    SELECT");
             sql.AppendLine("        SUM(CASE WHEN M.MatchStatus = 'Ambiguous' THEN 1 ELSE 0 END) AS Ambiguous_,");
             sql.AppendLine("        SUM(CASE WHEN M.MatchStatus IN ('Matched','AmountDifference') THEN 1 ELSE 0 END) AS Matched_,");
-            sql.AppendLine($"        MIN(M.{otherColumn}) AS CounterpartId,");
+            sql.AppendLine(CultureInfo.InvariantCulture, $"        MIN(M.{otherColumn}) AS CounterpartId,");
             sql.AppendLine("        MIN(M.MatchRuleId) AS MatchRuleId");
             sql.AppendLine("    FROM ops.MatchResult AS M");
-            sql.AppendLine($"    WHERE M.RunId = {run} AND M.{idColumn} = S.StagingId");
+            sql.AppendLine(CultureInfo.InvariantCulture, $"    WHERE M.RunId = {run} AND M.{idColumn} = S.StagingId");
             sql.AppendLine(") AS best");
             sql.AppendLine("WHERE " + range);
             // Excluded and Duplicate rows never entered matching, so their
@@ -283,8 +284,8 @@ public static class SqlQueryBuilderLifecycle
         sql.AppendLine("    (RunId, DefinitionId, BusinessDate, StagingId, Side, ExceptionCode,");
         sql.AppendLine("     AmountMinor, CurrencyCode, KeyValuesJson)");
         sql.AppendLine("SELECT");
-        sql.AppendLine($"    {run}, {def}, {bd}, S.StagingId, {sideName}, x.ExceptionCode,");
-        sql.AppendLine($"    {amountColumn}, {currencyColumn}, {keyJson}");
+        sql.AppendLine(CultureInfo.InvariantCulture, $"    {run}, {def}, {bd}, S.StagingId, {sideName}, x.ExceptionCode,");
+        sql.AppendLine(CultureInfo.InvariantCulture, $"    {amountColumn}, {currencyColumn}, {keyJson}");
         sql.AppendLine("FROM stg.StagingTransaction AS S");
         sql.AppendLine("CROSS APPLY (");
         sql.AppendLine("    SELECT TOP (1) v.ExceptionCode");
@@ -309,10 +310,10 @@ public static class SqlQueryBuilderLifecycle
         // A row already carrying an exception from this run is not classified
         // twice; this makes the step idempotent, which Resume depends on (B3).
         sql.AppendLine("  AND NOT EXISTS (SELECT 1 FROM ops.ReconException AS E");
-        sql.AppendLine($"                  WHERE E.RunId = {run} AND E.StagingId = S.StagingId);");
+        sql.AppendLine(CultureInfo.InvariantCulture, $"                  WHERE E.RunId = {run} AND E.StagingId = S.StagingId);");
         sql.AppendLine();
         sql.AppendLine("SELECT COUNT_BIG(*) AS Classified_ FROM ops.ReconException");
-        sql.AppendLine($"WHERE RunId = {run} AND Side = {sideName};");
+        sql.AppendLine(CultureInfo.InvariantCulture, $"WHERE RunId = {run} AND Side = {sideName};");
 
         return new CompiledStatement(sql.ToString(), p);
     }

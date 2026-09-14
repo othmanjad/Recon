@@ -21,7 +21,9 @@ that needs a developer, what was built is a CliQ tool with extra tables.
 | `design-review-v03.md` | Two review passes, findings and fixes |
 | `db/` | The SQL Server schema — four scripts, run in order |
 | `db/superseded/` | The v0.1 base and v0.2 delta, kept for history. Do not run |
+| `src/` | The .NET 8 engine — see `src/README.md` |
 | `ui/` | The portal prototype — HTML, Bootstrap 5, jQuery |
+| `build.sh` | Build and test in a container (the SDK cannot be installed here) |
 
 Start with `db/README.md` for the five things worth knowing before reading the
 schema, and `ui/README.md` for the front end.
@@ -62,7 +64,8 @@ exception.**
 | Design document | v1.0, reviewed twice |
 | Database schema | Complete, consolidated, and **executed** — 38 tables, built on SQL Server 2022 with 83 passing tests |
 | Portal | Prototype: six screens, browser-verified, reading mock data |
-| Engine (.NET) | **Not started** |
+| Engine (.NET) | Phase 1 and matching complete — 175 tests, and the 2M-row spike meets every budget |
+| Scheduler, reports, fees | **Not started** |
 
 Six questions remain open. All are business answers rather than design work, all
 have a place to live in the schema already, and none blocks the Phase 1 build —
@@ -94,6 +97,14 @@ now sets it itself rather than failing in whatever CI pipeline runs it first.
 and a Chromium pass that drives all six screens, failing on any console error or
 horizontal overflow at phone width.
 
-**The .NET engine has not been started.** The SDK cannot be installed in this
-environment — the network policy blocks Microsoft's download host — though
-`mcr.microsoft.com` is reachable, so an SDK container is a viable route.
+**The engine is executed too**, including against volume. 165 unit tests, 10
+integration tests against a live server, and the Phase 1 spike at 2,000,000
+rows per side — which meets every budget in the design and is the measurement
+that keeps the escalation path deferred. See `src/README.md` for the numbers.
+
+Running the engine found five more defects that the unit tests could not,
+including two of a kind worth naming: a checkpoint whose identity omitted the
+side, so the right dataset's exclusions, duplicates and classification were
+silently skipped; and `UseNormalized` inferred from the fields rather than
+stored, which quietly turned pass 1 — the clean reference match — into a second
+normalized pass.

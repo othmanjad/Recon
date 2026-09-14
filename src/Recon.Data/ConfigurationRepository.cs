@@ -224,7 +224,7 @@ public sealed class ConfigurationRepository(SqlConnection connection)
             """
             SELECT c.MatchRuleId, c.MatchConditionId, lf.FieldCode, rf.FieldCode,
                    c.ComparisonType, c.ToleranceValue, c.ToleranceUnit, c.Sequence,
-                   lf.NormalizeForMatch, rf.NormalizeForMatch
+                   c.UseNormalized, lf.NormalizeForMatch, rf.NormalizeForMatch
             FROM cfg.MatchCondition AS c
             JOIN cfg.MatchRule AS r ON r.MatchRuleId = c.MatchRuleId
             JOIN cfg.DatasetField AS lf ON lf.DatasetFieldId = c.LeftFieldId
@@ -246,10 +246,21 @@ public sealed class ConfigurationRepository(SqlConnection connection)
                         ? Db.ParseEnum<ToleranceUnit>(unit)
                         : null,
                     Sequence = r.GetInt32(7),
-                    // A pass compares the normalized companions when BOTH
-                    // sides have one. One side alone would compare a
-                    // normalized value to a raw one and match nothing.
-                    UseNormalized = r.GetBoolean(8) && r.GetBoolean(9),
+                    // Read from the rule, not inferred from the fields. The
+                    // earlier version derived this as "both sides have a
+                    // companion", which made pass 1 a normalized pass too.
+                    // Both fields must still HAVE a companion, or the
+                    // comparison would put a normalized value against a raw
+                    // one and match nothing — so a rule asking for it without
+                    // the fields to support it is a configuration error and
+                    // surfaces as one.
+                    UseNormalized = r.GetBoolean(8)
+                        ? r.GetBoolean(9) && r.GetBoolean(10)
+                            ? true
+                            : throw new InvalidOperationException(
+                                $"match condition {r.GetInt32(1)} asks to compare normalized " +
+                                $"companions, but {r.GetString(2)} or {r.GetString(3)} has none.")
+                        : false,
                 },
             },
             c => c.With("@id", definitionId),
@@ -387,6 +398,10 @@ internal static class AggregateSpecJson
     private static readonly System.Text.Json.JsonSerializerOptions Options = new()
     {
         PropertyNameCaseInsensitive = true,
+        // An aggregate spec names a MatchStatus and a Side by name, so the
+        // enum converter is not optional — without it every control total
+        // that restricts to matched rows fails to deserialize.
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() },
     };
 
     public static AggregateSpec Parse(string json) =>

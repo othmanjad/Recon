@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using Recon.Domain.Configuration;
 
@@ -57,9 +58,9 @@ public static partial class SqlQueryBuilderAggregate
         var businessDate = p.Add("@BusinessDate", ctx.BusinessDate.ToDateTime(TimeOnly.MinValue));
 
         var leftRange = SqlQueryBuilder.StagingRange("L", ctx.Definition.Left.DatasetId,
-            ctx.StagingRunId, ctx.WindowFrom, ctx.WindowTo, p);
+            ctx.StagingRunId, ctx.WindowFrom, ctx.WindowTo, p, matchableOnly: true);
         var rightRange = SqlQueryBuilder.StagingRange("R", ctx.Definition.Right.DatasetId,
-            ctx.StagingRunId, ctx.WindowFrom, ctx.WindowTo, p);
+            ctx.StagingRunId, ctx.WindowFrom, ctx.WindowTo, p, matchableOnly: true);
 
         var leftFilter = SqlQueryBuilder.CompileCondition(rule.LeftFilter, ctx.Definition.Left, "L", p);
         var rightFilter = SqlQueryBuilder.CompileCondition(rule.RightFilter, ctx.Definition.Right, "R", p);
@@ -86,7 +87,7 @@ public static partial class SqlQueryBuilderAggregate
         sql.AppendLine("SELECT");
         sql.AppendLine("    " + keyExpression + " AS GroupKey,");
         sql.AppendLine("    " + groupColumns + ",");
-        sql.AppendLine($"    SUM(CAST(L.{amountSlot} AS BIGINT)) AS AmountMinorSum,");
+        sql.AppendLine(CultureInfo.InvariantCulture, $"    SUM(CAST(L.{amountSlot} AS BIGINT)) AS AmountMinorSum,");
         sql.AppendLine("    COUNT_BIG(*) AS RowCnt,");
         sql.AppendLine("    MIN(L.StagingId) AS AnyStagingId,");
         sql.AppendLine("    MIN(L.TxDate) AS AnyTxDate");
@@ -95,7 +96,7 @@ public static partial class SqlQueryBuilderAggregate
         sql.AppendLine("WHERE " + leftRange);
         sql.AppendLine("  AND " + leftFilter);
         sql.AppendLine("  AND NOT EXISTS (SELECT 1 FROM ops.MatchResult AS M");
-        sql.AppendLine($"                  WHERE M.RunId = {runId} AND M.LeftStagingId = L.StagingId)");
+        sql.AppendLine(CultureInfo.InvariantCulture, $"                  WHERE M.RunId = {runId} AND M.LeftStagingId = L.StagingId)");
         sql.AppendLine("GROUP BY " + groupColumns + ";");
         sql.AppendLine();
 
@@ -142,7 +143,7 @@ public static partial class SqlQueryBuilderAggregate
         sql.AppendLine("WHERE " + rightRange);
         sql.AppendLine("  AND " + rightFilter);
         sql.AppendLine("  AND NOT EXISTS (SELECT 1 FROM ops.MatchResult AS M");
-        sql.AppendLine($"                  WHERE M.RunId = {runId} AND M.RightStagingId = R.StagingId);");
+        sql.AppendLine(CultureInfo.InvariantCulture, $"                  WHERE M.RunId = {runId} AND M.RightStagingId = R.StagingId);");
         sql.AppendLine();
 
         // Every member of a matched group is recorded, not just the
@@ -152,7 +153,7 @@ public static partial class SqlQueryBuilderAggregate
         sql.AppendLine("    (RunId, BusinessDate, LeftStagingId, RightStagingId, MatchRuleId,");
         sql.AppendLine("     MatchStatus, CandidateCount, LeftAggregateKey, RightAggregateKey)");
         sql.AppendLine("SELECT");
-        sql.AppendLine($"    {runId}, {businessDate}, L.StagingId, c.RightStagingId, {ruleId},");
+        sql.AppendLine(CultureInfo.InvariantCulture, $"    {runId}, {businessDate}, L.StagingId, c.RightStagingId, {ruleId},");
         sql.AppendLine("    CASE WHEN c.LeftCandidates > 1 OR c.RightCandidates > 1");
         sql.AppendLine("         THEN 'Ambiguous' ELSE 'Matched' END,");
         sql.AppendLine("    CASE WHEN c.LeftCandidates > c.RightCandidates");

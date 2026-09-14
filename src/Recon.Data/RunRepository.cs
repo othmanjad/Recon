@@ -228,17 +228,26 @@ public sealed class RunRepository(SqlConnection connection)
         long runId,
         RunStepName step,
         int? matchRuleId = null,
+        Side? side = null,
         CancellationToken cancellationToken = default)
     {
+        // A step's identity is (run, name, rule, side). The side is load-
+        // bearing: Exclude, Duplicates and Classify each run once per dataset,
+        // and without it the second side's step looked already-completed and
+        // was skipped — half a reconciliation, silently.
         var existing = await Db.QueryAsync(
             _connection,
             """
             SELECT RunStepId, Status FROM ops.ReconRunStep
             WHERE RunId = @run AND StepName = @step
-              AND ((MatchRuleId IS NULL AND @rule IS NULL) OR MatchRuleId = @rule);
+              AND ((MatchRuleId IS NULL AND @rule IS NULL) OR MatchRuleId = @rule)
+              AND ((Side IS NULL AND @side IS NULL) OR Side = @side);
             """,
             r => (Id: r.GetInt64(0), Status: r.GetString(1)),
-            c => c.With("@run", runId).With("@step", step.ToString()).With("@rule", matchRuleId),
+            c => c.With("@run", runId)
+                  .With("@step", step.ToString())
+                  .With("@rule", matchRuleId)
+                  .With("@side", side?.ToString()),
             cancellationToken).ConfigureAwait(false);
 
         if (existing.Count > 0 && existing[0].Status == nameof(StepStatus.Completed))
@@ -264,11 +273,14 @@ public sealed class RunRepository(SqlConnection connection)
         var id = await Db.ScalarAsync<long>(
             _connection,
             """
-            INSERT ops.ReconRunStep (RunId, StepName, MatchRuleId, Status, StartedAt)
-            VALUES (@run, @step, @rule, 'Running', SYSDATETIME());
+            INSERT ops.ReconRunStep (RunId, StepName, MatchRuleId, Side, Status, StartedAt)
+            VALUES (@run, @step, @rule, @side, 'Running', SYSDATETIME());
             SELECT CAST(SCOPE_IDENTITY() AS BIGINT);
             """,
-            c => c.With("@run", runId).With("@step", step.ToString()).With("@rule", matchRuleId),
+            c => c.With("@run", runId)
+                  .With("@step", step.ToString())
+                  .With("@rule", matchRuleId)
+                  .With("@side", side?.ToString()),
             cancellationToken).ConfigureAwait(false);
 
         return new StepHandle(id, AlreadyCompleted: false);

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using Recon.Domain.Configuration;
 using Recon.Engine.Sql;
@@ -54,14 +55,14 @@ public static class ControlTotalEvaluator
         sql.AppendLine();
         // Idempotent, so a resumed run re-evaluates rather than colliding with
         // the UNIQUE constraint on (RunId, ControlTotalId).
-        sql.AppendLine($"DELETE ops.ControlTotalResult WHERE RunId = {run} AND ControlTotalId = {checkId};");
+        sql.AppendLine(CultureInfo.InvariantCulture, $"DELETE ops.ControlTotalResult WHERE RunId = {run} AND ControlTotalId = {checkId};");
         sql.AppendLine();
         sql.AppendLine("INSERT ops.ControlTotalResult (RunId, ControlTotalId, ValueA, ValueB, IsBalanced)");
-        sql.AppendLine($"VALUES ({run}, {checkId}, @a, @b,");
-        sql.AppendLine($"        CASE WHEN ABS(@a - @b) <= {tolerance} THEN 1 ELSE 0 END);");
+        sql.AppendLine(CultureInfo.InvariantCulture, $"VALUES ({run}, {checkId}, @a, @b,");
+        sql.AppendLine(CultureInfo.InvariantCulture, $"        CASE WHEN ABS(@a - @b) <= {tolerance} THEN 1 ELSE 0 END);");
         sql.AppendLine();
         sql.AppendLine("SELECT @a AS ValueA, @b AS ValueB,");
-        sql.AppendLine($"       CASE WHEN ABS(@a - @b) <= {tolerance} THEN 1 ELSE 0 END AS IsBalanced;");
+        sql.AppendLine(CultureInfo.InvariantCulture, $"       CASE WHEN ABS(@a - @b) <= {tolerance} THEN 1 ELSE 0 END AS IsBalanced;");
 
         return new CompiledStatement(sql.ToString(), p);
     }

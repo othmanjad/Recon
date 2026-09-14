@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Run dashboard · Reconciliation Platform</title>
+<link rel="stylesheet" href="vendor/bootstrap.min.css">
+<link rel="stylesheet" href="vendor/bootstrap-icons.css">
+<link rel="stylesheet" href="css/recon.css">
+</head>
+<body>
+
+<header class="rc-header" id="rc-header"></header>
+
+<div class="d-flex">
+  <div class="rc-sidebar-wrap"><aside class="rc-sidebar" id="rc-sidebar"></aside></div>
+  <main class="rc-main flex-grow-1">
+
+    <div class="rc-crumb mb-1">Operations</div>
+    <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+      <h1 class="h4 mb-0">Run dashboard</h1>
+      <div class="d-flex gap-2 flex-wrap">
+        <select class="form-select form-select-sm" id="f-definition" style="width:auto"></select>
+        <select class="form-select form-select-sm" id="f-status" style="width:auto">
+          <option value="">All statuses</option>
+          <option>Completed</option><option>Running</option><option>Failed</option>
+        </select>
+        <button class="btn btn-sm btn-outline-secondary" id="btn-reset" type="button">Reset</button>
+      </div>
+    </div>
+
+    <div class="row g-3 mb-3" id="tiles"></div>
+
+    <div class="rc-card mb-3">
+      <div class="rc-card-head">
+        <h2>Runs</h2>
+        <span class="rc-help" id="run-count"></span>
+      </div>
+      <div class="rc-table-scroll">
+        <table class="table rc-table table-hover align-middle">
+          <thead>
+            <tr>
+              <th>Run</th><th>Definition</th><th>Business date</th><th>Session</th>
+              <th>Type</th><th>Status</th>
+              <th class="text-end">Left rows</th><th class="text-end">Right rows</th>
+              <th class="text-end">Matched</th><th class="text-end">Unmatched</th>
+              <th class="text-end">Duration</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="run-rows"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="row g-3">
+      <div class="col-xl-7">
+        <div class="rc-card h-100">
+          <div class="rc-card-head">
+            <h2>Match distribution <span class="rc-help" id="dist-run"></span></h2>
+          </div>
+          <div class="p-3">
+            <p class="rc-help mb-3">
+              How matches spread across the ordered passes. A rising share in the
+              last pass is the data-quality early warning the design calls
+              <code>MatchDistributionDrift</code> — it means the clean reference
+              match is degrading upstream.
+            </p>
+            <div id="dist"></div>
+          </div>
+        </div>
+      </div>
+      <div class="col-xl-5">
+        <div class="rc-card h-100">
+          <div class="rc-card-head"><h2>Control totals</h2></div>
+          <div class="p-3">
+            <p class="rc-help mb-3">
+              A run with fully matched rows but a non-zero net difference is a
+              <strong>failed run</strong>. Differences are shown in minor units.
+            </p>
+            <div id="totals"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<div class="offcanvas offcanvas-start" tabindex="-1" id="rc-offcanvas">
+  <div class="offcanvas-header">
+    <h5 class="offcanvas-title">Menu</h5>
+    <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+  </div>
+  <div class="offcanvas-body p-0" id="rc-offcanvas-body"></div>
+</div>
+
+<script src="vendor/jquery.min.js"></script>
+<script src="vendor/bootstrap.bundle.min.js"></script>
+<script src="js/mock-data.js"></script>
+<script src="js/recon-shell.js"></script>
+<script src="js/page-dashboard.js"></script>
+</body>
+</html>

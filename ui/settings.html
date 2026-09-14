@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Platform settings · Reconciliation Platform</title>
+<link rel="stylesheet" href="vendor/bootstrap.min.css">
+<link rel="stylesheet" href="vendor/bootstrap-icons.css">
+<link rel="stylesheet" href="css/recon.css">
+</head>
+<body>
+
+<header class="rc-header" id="rc-header"></header>
+
+<div class="d-flex">
+  <div class="rc-sidebar-wrap"><aside class="rc-sidebar" id="rc-sidebar"></aside></div>
+  <main class="rc-main flex-grow-1">
+    <div class="rc-crumb mb-1">Configuration</div>
+    <h1 class="h4 mb-3">Platform settings</h1>
+
+    <p class="rc-help mb-3" style="max-width:70ch">
+      These were the parameters the v0.2 schema described only in SQL
+      comments, with no table to hold them. <code>StagingMonthsOnline</code>
+      is the single largest cost driver in the system.
+    </p>
+    <div class="rc-card">
+      <div class="rc-card-head">
+        <h2>cfg.PlatformSetting</h2>
+        <button class="btn btn-sm btn-outline-secondary" type="button" disabled>Save changes</button>
+      </div>
+      <div class="rc-table-scroll">
+        <table class="table rc-table align-middle">
+          <thead><tr><th>Key</th><th style="width:160px">Value</th><th>Type</th><th>Description</th></tr></thead>
+          <tbody id="set-rows"></tbody>
+        </table>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<div class="offcanvas offcanvas-start" tabindex="-1" id="rc-offcanvas">
+  <div class="offcanvas-header">
+    <h5 class="offcanvas-title">Menu</h5>
+    <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+  </div>
+  <div class="offcanvas-body p-0" id="rc-offcanvas-body"></div>
+</div>
+
+<script src="vendor/jquery.min.js"></script>
+<script src="vendor/bootstrap.bundle.min.js"></script>
+<script src="js/mock-data.js"></script>
+<script src="js/recon-shell.js"></script>
+<script src="js/page-settings.js"></script>
+</body>
+</html>

@@ -1,0 +1,227 @@
+/* =====================================================================
+   Reconciliation Platform — portal styles
+   Bootstrap 5 + jQuery. No SPA framework, no build step: every file here
+   is served as-is and opens in a browser directly.
+   ===================================================================== */
+
+:root {
+    --rc-sidebar-w: 248px;
+    --rc-header-h: 56px;
+    --rc-ink: #12263f;
+    --rc-muted: #6b7a90;
+    --rc-line: #e3e8ef;
+    --rc-bg: #f6f8fb;
+    --rc-accent: #1b4f8a;
+    --rc-accent-soft: #eaf1f9;
+}
+
+body {
+    background: var(--rc-bg);
+    color: var(--rc-ink);
+    font-size: 14px;
+}
+
+/* ---- numbers ------------------------------------------------------- */
+/* Money and counts are tabular: digits must align across rows so a
+   reconciliation difference is visible at a glance. */
+.rc-num {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: "tnum";
+    text-align: right;
+    white-space: nowrap;
+}
+.rc-num-neg { color: #b02a37; }
+.rc-mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12.5px;
+}
+
+/* ---- shell --------------------------------------------------------- */
+.rc-header {
+    height: var(--rc-header-h);
+    background: #fff;
+    border-bottom: 1px solid var(--rc-line);
+    position: sticky;
+    top: 0;
+    z-index: 1030;
+}
+.rc-brand {
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--rc-accent);
+}
+
+.rc-sidebar-wrap { display: flex; }
+
+/* Sticky, not scrolling away: an operations portal is navigated
+   constantly, and the run list is long enough to lose the menu. */
+.rc-sidebar {
+    width: var(--rc-sidebar-w);
+    background: #fff;
+    border-right: 1px solid var(--rc-line);
+    padding: 12px 0;
+    position: sticky;
+    top: var(--rc-header-h);
+    height: calc(100vh - var(--rc-header-h));
+    overflow-y: auto;
+    align-self: flex-start;
+}
+.rc-sidebar .nav-link {
+    color: var(--rc-ink);
+    border-radius: 0;
+    padding: 7px 18px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+}
+.rc-sidebar .nav-link:hover { background: var(--rc-bg); }
+.rc-sidebar .nav-link.active {
+    background: var(--rc-accent-soft);
+    color: var(--rc-accent);
+    font-weight: 600;
+    box-shadow: inset 3px 0 0 var(--rc-accent);
+}
+.rc-sidebar .rc-nav-group {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--rc-muted);
+    padding: 14px 18px 5px;
+    font-weight: 600;
+}
+
+.rc-main { padding: 20px 24px 48px; min-width: 0; }
+
+/* On phones the sidebar collapses into an offcanvas; see index.html. */
+@media (max-width: 991.98px) {
+    .rc-sidebar-wrap { display: none; }
+}
+
+/* ---- cards / tables ------------------------------------------------ */
+.rc-card {
+    background: #fff;
+    border: 1px solid var(--rc-line);
+    border-radius: 8px;
+}
+.rc-card-head {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--rc-line);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+.rc-card-head h2, .rc-card-head h3 {
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0;
+}
+
+.table.rc-table { margin: 0; }
+.table.rc-table > thead > tr > th {
+    background: #fbfcfe;
+    border-bottom: 1px solid var(--rc-line);
+    font-size: 11.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--rc-muted);
+    font-weight: 600;
+    white-space: nowrap;
+}
+.table.rc-table > tbody > tr > td { vertical-align: middle; }
+.rc-table-scroll { overflow-x: auto; }
+
+/* ---- stat tiles ---------------------------------------------------- */
+.rc-tile {
+    background: #fff;
+    border: 1px solid var(--rc-line);
+    border-radius: 8px;
+    padding: 14px 16px;
+    height: 100%;
+}
+.rc-tile-label {
+    font-size: 11.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--rc-muted);
+    font-weight: 600;
+}
+.rc-tile-value {
+    font-size: 22px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    margin-top: 3px;
+    letter-spacing: -0.01em;
+}
+.rc-tile-sub { font-size: 12px; color: var(--rc-muted); }
+
+/* ---- pass distribution bars (the data-quality early warning) ------- */
+.rc-pass-bar {
+    height: 8px;
+    border-radius: 4px;
+    background: var(--rc-line);
+    overflow: hidden;
+}
+.rc-pass-bar > span {
+    display: block;
+    height: 100%;
+    background: var(--rc-accent);
+}
+.rc-pass-bar.rc-pass-late > span { background: #c77700; }
+
+/* ---- rule builder -------------------------------------------------- */
+.rc-pass {
+    border: 1px solid var(--rc-line);
+    border-radius: 8px;
+    background: #fff;
+    margin-bottom: 12px;
+}
+.rc-pass-head {
+    padding: 10px 14px;
+    background: #fbfcfe;
+    border-bottom: 1px solid var(--rc-line);
+    border-radius: 8px 8px 0 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+.rc-seq {
+    width: 26px;
+    height: 26px;
+    border-radius: 50%;
+    background: var(--rc-accent);
+    color: #fff;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 600;
+    flex: 0 0 auto;
+}
+.rc-cond-row { padding: 10px 14px; border-bottom: 1px dashed var(--rc-line); }
+.rc-cond-row:last-child { border-bottom: 0; }
+
+/* A field that cannot use an index must be visible as such: the design
+   requires the UI to warn, not merely allow. */
+.rc-warn-nonsargable {
+    background: #fff8e6;
+    border-left: 3px solid #c77700;
+}
+
+.rc-badge-role {
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+/* ---- misc ---------------------------------------------------------- */
+.rc-empty { padding: 36px 16px; text-align: center; color: var(--rc-muted); }
+.rc-help { font-size: 12px; color: var(--rc-muted); }
+.rc-crumb { font-size: 12.5px; color: var(--rc-muted); }
+.rc-crumb a { color: var(--rc-muted); text-decoration: none; }
+.rc-crumb a:hover { text-decoration: underline; }
+code.rc-field { background: var(--rc-accent-soft); color: var(--rc-accent);
+                padding: 1px 5px; border-radius: 3px; font-size: 12px; }

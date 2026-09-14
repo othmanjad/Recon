@@ -127,10 +127,179 @@ Each pass updated `MatchStatus` on staging. At 2M rows × 4 passes that is 8M ro
 
 ---
 
+## Second pass — v1.0 (schema read as one artifact)
+
+**Reviewed:** `recon-platform-ddl.sql` v0.1 **together with** `recon-platform-ddl-v02-delta.sql`.
+**Why a second pass:** the v0.3 review checked the design document and the base
+schema. It did not check the base and the delta *as the single artifact a
+developer would actually deploy*. Reading them together surfaced five gaps that
+neither file shows on its own, plus one defect introduced by the fix for C4.
+
+Every statement in the delta applied cleanly to the base — the `ALTER`s,
+`DROP CONSTRAINT`s and `DROP INDEX`es all found their targets. The problems were
+semantic, not syntactic.
+
+| # | Finding | Severity | Status |
+|---|---------|----------|--------|
+| 1 | `Rematch` silently overwrites the run it reuses; and nothing says which run's staged rows to read | **BLOCKER** | Fixed |
+| 2 | `NormalizedSlot` sits outside slot-uniqueness — a companion slot can overwrite a mapped field | **BLOCKER** | Fixed |
+| 3 | `*Fils` naming survived the multi-currency fix; in a USD reconciliation the column names lie | HIGH | Fixed |
+| 4 | Retention parameters exist only as SQL comments — no table holds them | HIGH | Fixed |
+| 5 | No role can `SELECT` on schema `aud`, so the promised audit viewer cannot read the audit log | HIGH | Fixed |
+
+### V1 · BLOCKER · `Rematch` contradicts "re-runs never overwrite"
+
+Three decisions, each correct alone, collide:
+
+- **B4** — a `Rematch` reuses the source run's staged rows.
+- **A3** — `MatchStatus` on staging is written **once**, at the end of the run.
+- **§14** — "re-runs never overwrite. The prior run is marked `IsCurrent = 0` and remains intact and queryable."
+
+A `Rematch` therefore writes its own `MatchStatus`, `MatchedWithId` and
+`ExceptionCode` onto rows owned by the source run — destroying that run's
+row-level results while the design claims they survive. Worse, nothing states
+which run's staging a query should read: `stg.StagingTransaction.RunId` is the
+*loading* run, so every query filtering by the executing `RunId` returns **zero
+rows** on a Rematch.
+
+**Fix applied — three parts:**
+
+1. `stg.StagingTransaction.RunId` is renamed **`LoadRunId`**. The name now says
+   what it means: the run that staged the row.
+2. `ops.ReconRun.StagingRunId` is a persisted computed column,
+   `ISNULL(SourceRunId, RunId)`. The rule for which staging to read is stated
+   once, in the schema, and every consumer joins on it.
+3. `stg.StagingTransaction.ResultRunId` stamps which run produced the cached
+   status columns. Those four columns are now documented for what A3 made them:
+   a **cache** of the most recent run over these rows. The authoritative
+   per-run record is `ops.MatchResult` (per run, never rewritten) plus
+   `ops.RunAggregate` — so "re-runs never overwrite" is true at the level that
+   matters, and is now true as written.
+
+### V2 · BLOCKER · The normalized companion slot can overwrite a mapped field
+
+`UQ_DatasetField_Slot UNIQUE (DatasetId, StorageSlot)` guards `StorageSlot`
+only. The delta added `NormalizedSlot` with no uniqueness, no foreign key to the
+slot catalogue, and no check that the target slot is a string. Nothing prevented
+field A's `NormalizedSlot = 'Text21'` while field B's `StorageSlot = 'Text21'` —
+the parse-time normalizer then overwrites a mapped financial field, silently.
+
+This also hid a capacity error: the real text capacity was never 30, but 30 minus
+the number of normalized fields.
+
+**Fix applied:** `cfg.StorageSlotCatalogue.IsNormalizedOnly` splits the pool.
+`Text1..Text20` are reservable; `Text21..Text30` are companions and are never
+offered as a `StorageSlot`. Both columns are now foreign keys to the catalogue, a
+filtered unique index `UX_DatasetField_NormSlot` stops two fields sharing a
+companion, and a trigger enforces the two rules a `CHECK` cannot express — pool
+membership on each side, and slot type matching the field's declared type.
+
+### V3 · HIGH · `*Fils` naming outlived the currency fix
+
+C4 made minor units configurable and the delta introduced `AmountMinorSum`, but
+twenty columns in the base still read `ToleranceFils`, `AmountFils`,
+`RevenueFils`, `AmountFromFils` and so on. For a partner settling in USD the
+column names are actively wrong, and the design document had already renamed
+`ToleranceFils` to `ToleranceMinor` — the DDL had simply not followed.
+
+**Fix applied:** every monetary column is `*Minor`. The window for this closes
+with the first production row, and the database is empty today.
+
+### V4 · HIGH · Retention parameters had nowhere to live
+
+`StagingMonthsOnline` (default 3), `ResultsMonthsOnline`, the 7-day sandbox
+purge and the partition-lookahead count were all defined in E2/E3/E5 — and all
+existed only inside SQL comment blocks. There was no settings table anywhere in
+the schema, so the largest cost driver in the system had no configurable home.
+
+**Fix applied:** `cfg.PlatformSetting`, seeded with the ten operational
+parameters the design relies on. `ResultsMonthsOnline` is seeded at 84 months
+and explicitly labelled a placeholder, not a decision.
+
+### V5 · HIGH · The audit viewer could not read the audit log
+
+§13 promises an audit log viewer and D3 requires export actions to be logged
+"because regulators ask". The delta's grants gave `recon_app` a single
+permission on schema `aud`: `INSERT`. No role was granted `SELECT`. The feature
+could not have worked.
+
+**Fix applied:** `SELECT` on `aud` granted to `recon_app` and `recon_reader`;
+`UPDATE` and `DELETE` on `aud` remain granted to nobody, which is the property
+worth protecting. The audit `Action` list also gains `'Export'`, which D3 asked
+for and the delta had not added.
+
+### Smaller items fixed in the same pass
+
+**`RunType` had no `CHECK`** — every other enumeration column in the schema has
+one, and `UX_ReconRun_Current` filters on `RunType <> 'Sandbox'`, so a typo
+would have pulled a sandbox run into the uniqueness scope and into period
+aggregates. Constrained now, along with `StepName`, `FieldRole`, `EventType`,
+`ErrorType`, `Severity` and `SqlSourceParameter.DataType`.
+
+**A5 was commented out.** `SET READ_COMMITTED_SNAPSHOT ON` — described by this
+review as "non-negotiable at this volume" — was a `--` comment in the delta. A
+commented-out non-negotiable is one that gets skipped. It is now a real
+statement in `db/04-database-options.sql`.
+
+**`recon_activator` was over-granted.** `GRANT ALTER ON SCHEMA::stg` also permits
+`ALTER TABLE` on a table with hundreds of millions of rows, well beyond the
+"views and indexes only" intent. Narrowed to an object-level grant on
+`stg.StagingTransaction`.
+
+**Condition-tree columns disagreed on width.** B5 mandates one schema for all
+filters, but `MatchRule.LeftFilter`/`RightFilter` and
+`ControlTotalDefinition.SourceAExpression`/`B` were `NVARCHAR(1000)` while every
+other column holding the same JSON was `NVARCHAR(MAX)`. One schema, one
+compiler, and one of them truncating. All are `NVARCHAR(MAX)` now, each with an
+`ISJSON` check.
+
+**A7 and B7 were never applied.** `ReconException.AgeDays` was still a
+non-deterministic computed column — unindexable and evaluated on every row read.
+Dropped; aging is computed in the query layer, filtering on the indexed
+`BusinessDate`. `TransformChain` is now `TransformChainJson`, a validated JSON
+array instead of a pipe-delimited string.
+
+**`RunAggregate` was inconsistent with the rest of the schema.** `RowCount`
+collides with the reserved `ROWCOUNT` keyword (now `RowCnt`), and
+`DefinitionId`/`CurrencyCode` carried no foreign keys in an otherwise
+consistently referenced schema.
+
+### One defect introduced during this pass, and caught
+
+The first draft of the V2 fix used `CONSTRAINT UQ_DatasetField_NormSlot UNIQUE
+(DatasetId, NormalizedSlot)`. SQL Server treats `NULL`s as equal in a unique
+constraint, so that would have allowed exactly **one** field per dataset without
+a companion slot — and most fields have none. Replaced with a filtered unique
+index. Recorded here because it is the same class of error as the findings above:
+a constraint that reads correctly and does something else.
+
+---
+
 ## What changed in the artifacts
 
-- **`cliq-recon-design.md` → v0.3**: §7 load path rewritten; §9 comparison types, pass mechanics, aggregate mode and candidate resolution rewritten; §11 control totals rewritten with scope and `RunAggregate`; §14 data model updated; new §9.7 reproducibility.
-- **`recon-platform-ddl-v02-delta.sql`**: all schema changes above as a delta over v0.1 (new tables `cfg.Currency`, `cfg.ExclusionRule`, `ops.RunAggregate`; altered `MatchRule`, `MatchCondition`, `ControlTotalDefinition`, `ReconRun`, `ReconException`, `Dataset`, `ReconciliationDefinition`, `SqlSourceDefinition`, `FileFormatDefinition`; dropped filtered index; new roles).
+**v0.3**
 
-## Still open (unchanged from v0.2)
-Retention period · rounding mode · sales tax on fees · sessions per day · alert channels.
+- **`cliq-recon-design.md` → v0.3**: §7 load path rewritten; §9 comparison types, pass mechanics, aggregate mode and candidate resolution rewritten; §11 control totals rewritten with scope and `RunAggregate`; §14 data model updated; new §9.7 reproducibility.
+- **`recon-platform-ddl-v02-delta.sql`**: all schema changes above as a delta over v0.1.
+
+**v1.0**
+
+- **`cliq-recon-design.md` → v1.0**: §15 question 6 closed (it contradicted the confirmed decision in §7); monetary wording moved from "fils" to "minor units" throughout; new §13.1 recording the front-end stack decision.
+- **`db/01-schema.sql`** — the base and the delta merged into one executable script with the findings above applied. 38 tables. It supersedes both `recon-platform-ddl.sql` and `recon-platform-ddl-v02-delta.sql`, which move to `db/superseded/`; the delta form served its purpose (every change visible for review) and now only creates two sources of truth.
+- **`db/02-seed.sql`** — currencies, the split slot catalogue, and `cfg.PlatformSetting`.
+- **`db/03-roles.sql`** — the four least-privilege roles, with the `aud` read path fixed.
+- **`db/04-database-options.sql`** — `READ_COMMITTED_SNAPSHOT`, as a statement rather than a comment.
+- **`ui/`** — the portal prototype: run dashboard, exception workspace, dataset/field registry, rule builder, counterparties, settings. HTML + Bootstrap 5 + jQuery, libraries vendored, no build step.
+
+## Still open
+
+Retention period · rounding mode · sales tax on fees · sessions per day · alert
+channels · whether the primary reference is globally unique or reused across days.
+
+All six are **business answers, not design work.** Each has a place to live in
+the schema already (`cfg.PlatformSetting`, `FeeSchedule.RoundingMode`,
+`cfg.AlertPolicy`, `ScheduleDefinition`), so none blocks the Phase 1 build.
+Two have a deadline: the rounding mode must be confirmed **before Phase 5**, or
+fee netting will never tie out; and whether the primary reference is reused
+across days decides whether pass 1 joins on reference alone or reference + date,
+which is the shape of the first index built.

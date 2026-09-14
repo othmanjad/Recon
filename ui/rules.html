@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rule builder · Reconciliation Platform</title>
+<link rel="stylesheet" href="vendor/bootstrap.min.css">
+<link rel="stylesheet" href="vendor/bootstrap-icons.css">
+<link rel="stylesheet" href="css/recon.css">
+</head>
+<body>
+
+<header class="rc-header" id="rc-header"></header>
+
+<div class="d-flex">
+  <div class="rc-sidebar-wrap"><aside class="rc-sidebar" id="rc-sidebar"></aside></div>
+  <main class="rc-main flex-grow-1">
+
+    <div class="rc-crumb mb-1">Configuration</div>
+    <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+      <h1 class="h4 mb-0">Rule builder</h1>
+      <div class="d-flex gap-2 flex-wrap">
+        <button class="btn btn-sm btn-outline-secondary" id="btn-dryrun" type="button">
+          <i class="bi bi-play"></i> Dry-run against sample
+        </button>
+        <button class="btn btn-sm btn-primary" id="btn-save" type="button">Save rule set</button>
+      </div>
+    </div>
+
+    <div class="rc-card mb-3">
+      <div class="rc-card-head">
+        <h2>Reconciliation definition</h2>
+      </div>
+      <div class="p-3">
+        <div class="row g-3 align-items-end">
+          <div class="col-md-5">
+            <label class="form-label" for="def-select">Definition</label>
+            <select class="form-select" id="def-select"></select>
+          </div>
+          <div class="col-md-7">
+            <div class="rc-help" id="def-sides"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="alert alert-light border d-flex gap-2 align-items-start">
+      <i class="bi bi-shield-check fs-5 text-primary"></i>
+      <div class="small">
+        <strong>Why this builder is safe.</strong> Both sides of every condition are
+        chosen from the datasets' field registries — never typed. The compiler
+        resolves them to storage slots and parameterizes all values, and one class
+        (and only one) emits SQL. A field the registry does not mark
+        <em>matchable</em> never appears in these dropdowns.
+      </div>
+    </div>
+
+    <div id="passes"></div>
+
+    <button class="btn btn-sm btn-outline-primary" id="btn-add-pass" type="button">
+      <i class="bi bi-plus-lg"></i> Add pass
+    </button>
+
+    <div class="rc-card mt-4">
+      <div class="rc-card-head">
+        <h2>Row filter (condition tree)</h2>
+        <span class="rc-help">one schema for rules, classifications, exclusions, SQL sources and reports</span>
+      </div>
+      <div class="p-3">
+        <p class="rc-help">
+          The review replaced free SQL text with this structured tree (D1/B5).
+          Edit it and press <em>Validate</em>: an unknown field code, or a field
+          the registry does not mark matchable, is rejected here and never
+          reaches the compiler.
+        </p>
+        <div class="row g-3">
+          <div class="col-lg-7">
+            <label class="form-label" for="ct-json">Left filter JSON</label>
+            <textarea class="form-control rc-mono" id="ct-json" rows="11" spellcheck="false"></textarea>
+            <div class="d-flex gap-2 mt-2 flex-wrap">
+              <button class="btn btn-sm btn-primary" id="btn-validate" type="button">Validate</button>
+              <button class="btn btn-sm btn-outline-secondary" id="btn-sample-ok" type="button">Load valid example</button>
+              <button class="btn btn-sm btn-outline-danger" id="btn-sample-bad" type="button">Load rejected example</button>
+            </div>
+          </div>
+          <div class="col-lg-5">
+            <label class="form-label">Result</label>
+            <div id="ct-result"><div class="rc-help">Not validated yet.</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="rc-card mt-3" id="dryrun-card" hidden>
+      <div class="rc-card-head"><h2>Sandbox dry-run</h2></div>
+      <div class="p-3">
+        <p class="rc-help">
+          Per-pass match rates against the sample file, before anything goes live.
+          Design §2.1 step 6 is not optional: without it Operations activates
+          broken rules against production data.
+        </p>
+        <div id="dryrun-body"></div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<div class="offcanvas offcanvas-start" tabindex="-1" id="rc-offcanvas">
+  <div class="offcanvas-header">
+    <h5 class="offcanvas-title">Menu</h5>
+    <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+  </div>
+  <div class="offcanvas-body p-0" id="rc-offcanvas-body"></div>
+</div>
+
+<script src="vendor/jquery.min.js"></script>
+<script src="vendor/bootstrap.bundle.min.js"></script>
+<script src="js/mock-data.js"></script>
+<script src="js/recon-shell.js"></script>
+<script src="js/condition-tree.js"></script>
+<script src="js/page-rules.js"></script>
+</body>
+</html>

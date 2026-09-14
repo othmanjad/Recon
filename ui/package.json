@@ -1,0 +1,16 @@
+{
+  "name": "recon-portal-prototype",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Reconciliation Platform portal prototype — HTML, Bootstrap 5, jQuery. No build step; these dependencies are for testing only.",
+  "scripts": {
+    "test": "node test-ct.js",
+    "test:browser": "node drive.js",
+    "test:all": "node test-ct.js && node drive.js"
+  },
+  "devDependencies": {
+    "jsdom": "^26.0.0",
+    "playwright": "^1.49.1",
+    "jquery": "3.7.1"
+  }
+}

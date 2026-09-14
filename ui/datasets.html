@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Datasets &amp; fields · Reconciliation Platform</title>
+<link rel="stylesheet" href="vendor/bootstrap.min.css">
+<link rel="stylesheet" href="vendor/bootstrap-icons.css">
+<link rel="stylesheet" href="css/recon.css">
+</head>
+<body>
+
+<header class="rc-header" id="rc-header"></header>
+
+<div class="d-flex">
+  <div class="rc-sidebar-wrap"><aside class="rc-sidebar" id="rc-sidebar"></aside></div>
+  <main class="rc-main flex-grow-1">
+
+    <div class="rc-crumb mb-1">Configuration</div>
+    <div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+      <h1 class="h4 mb-0">Datasets &amp; field registry</h1>
+      <button class="btn btn-sm btn-primary" type="button">
+        <i class="bi bi-plus-lg"></i> New dataset
+      </button>
+    </div>
+
+    <div class="row g-3">
+      <div class="col-lg-4">
+        <div class="rc-card">
+          <div class="rc-card-head"><h2>Datasets</h2></div>
+          <div class="list-group list-group-flush" id="ds-list"></div>
+        </div>
+
+        <div class="rc-card mt-3">
+          <div class="rc-card-head"><h2>Slot usage</h2></div>
+          <div class="p-3" id="slot-usage"></div>
+        </div>
+      </div>
+
+      <div class="col-lg-8">
+        <div class="rc-card">
+          <div class="rc-card-head">
+            <h2 id="fr-title">Field registry</h2>
+            <span class="rc-help" id="fr-sub"></span>
+          </div>
+          <div class="p-3 pb-0">
+            <p class="rc-help mb-3">
+              Every dataset carries a registry of its own fields. The rule builder
+              populates its dropdowns from here, so the engine never hardcodes a
+              counterparty's vocabulary. <strong>Role</strong> gives the engine
+              semantics without names: it looks for the field whose role is
+              <code>Amount</code>, never for a field called &quot;Amount&quot;.
+              <strong>Matchable</strong> is the security boundary — only these
+              fields may appear in a rule.
+            </p>
+          </div>
+          <div class="rc-table-scroll">
+            <table class="table rc-table table-hover align-middle">
+              <thead>
+                <tr>
+                  <th>Field code</th><th>Label</th><th>Type</th><th>Role</th>
+                  <th>Slot</th><th class="text-center">Matchable</th>
+                  <th class="text-center">Indexed</th><th>Normalized companion</th>
+                </tr>
+              </thead>
+              <tbody id="fr-rows"></tbody>
+            </table>
+          </div>
+          <div class="p-3 border-top" id="fr-validation"></div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<div class="offcanvas offcanvas-start" tabindex="-1" id="rc-offcanvas">
+  <div class="offcanvas-header">
+    <h5 class="offcanvas-title">Menu</h5>
+    <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+  </div>
+  <div class="offcanvas-body p-0" id="rc-offcanvas-body"></div>
+</div>
+
+<script src="vendor/jquery.min.js"></script>
+<script src="vendor/bootstrap.bundle.min.js"></script>
+<script src="js/mock-data.js"></script>
+<script src="js/recon-shell.js"></script>
+<script src="js/page-datasets.js"></script>
+</body>
+</html>

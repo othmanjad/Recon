@@ -1,8 +1,12 @@
 # Reconciliation Platform
-## Technical Design Document — v0.3 (post-review)
+## Technical Design Document — v1.0 (post-review, schema consolidated)
 
 **Source:** SRS "Cliq Reconciliation Portal and Cliq Interchange Module" V1, 7-4-2026
-**Status:** Reviewed (see design-review-v03.md). Open questions in §15 must be closed before Phase 1 build.
+**Status:** Reviewed twice (see `design-review-v03.md`). The v1.0 pass closed the
+five structural gaps found when the v0.1 base schema and the v0.2 delta were read
+as one artifact; the schema now lives as a single executable script in `db/`.
+The remaining items in §15 are **business answers, not design work** — none of
+them blocks the Phase 1 build.
 
 **Product definition (revised in v0.2):** this is **not** a CliQ reconciliation system. It is a **generic reconciliation platform** on which an Operations user can onboard **any counterparty** — JoPACC, a bank, a scheme, a remittance partner — define its data sources, build its matching rules, its fee schedules and its reports **from the portal, without a developer**.
 
@@ -82,7 +86,7 @@ No deployment. No developer. Step 6 is not optional — without a sandbox run, O
 | Acquisition | Scheduled API pull returning CSV (per-dataset configurable) |
 | OM data access | SQL View or Stored Procedure (batch) / API (single lookup) |
 | Matching keys | **User-defined per rule** — field-to-field pairs chosen in the UI |
-| Amount comparison | To the **fils** — 3 decimals, exact |
+| Amount comparison | To the **minor unit** — exact, on integers. JOD has 3 (fils), USD/EUR have 2; the scale comes from `cfg.Currency`, never from a constant |
 | Any difference | Treated as a break |
 | Failed Inward | **Detect and report only.** No automatic posting in this phase |
 | Maker/Checker | Not required now (audit trail still mandatory) |
@@ -91,6 +95,7 @@ No deployment. No developer. Step 6 is not optional — without a sandbox run, O
 | Volume | ~2,000,000 transactions **per day** |
 | Users | Operations |
 | UI language | English |
+| UI stack | **HTML + Bootstrap 5 + jQuery + plain JavaScript.** No SPA framework, no build step — see §13.1 |
 | Scheduling & alerting | Required |
 | DB topology | Recon DB and OM DB may be same or different servers |
 | Timestamps | Local time (Jordan, UTC+3, no DST) — timezone stored explicitly |
@@ -195,7 +200,7 @@ Three conditions make slots work well:
 
 1. **Be generous with slot counts from the start** — 30 text, 15 integer, 5 decimal, 8 date, 5 boolean. Widening later means `ALTER TABLE` on a table with hundreds of millions of rows. Empty columns cost almost nothing in SQL Server.
 2. **The field registry is the only path to the data.** No hand-written query ever references `Text7` directly. This is what preserves the option to switch storage models later.
-3. **Generate a readable view per dataset** from the registry (`Text1 AS EndToEndId, Num1 AS AmountFils`). This removes the only genuine drawback of slots — unreadable raw tables — and creating a view is not a data-structure change, so it does not attract the objection that generated tables do.
+3. **Generate a readable view per dataset** from the registry (`Text1 AS EndToEndId, Num1 AS AmountMinor`). This removes the only genuine drawback of slots — unreadable raw tables — and creating a view is not a data-structure change, so it does not attract the objection that generated tables do.
 
 **Load path (corrected in v0.3):** the earlier note "load into a heap, then index" is impossible on a shared table with a permanent clustered index. The real path: `SqlBulkCopy` with `TableLock`, batches of ~100 000, and an **`ORDER` hint matching the clustered key `(DatasetId, TxDate, StagingId)`** — sorted input into a clustered index is minimally logged and avoids page splits. Nonclustered indexes are kept to ≤ 4 per dataset. **Phase 1 includes a mandatory performance spike** at 2M synthetic rows; if load exceeds 2 minutes, the escalation path is daily partitions + a persisted composite partition column + heap load + `SWITCH PARTITION`.
 
@@ -206,7 +211,7 @@ Three conditions make slots work well:
 - **Never** `float` or `double`, at any stage.
 - Store `DECIMAL(18,3)`; derive `AmountMinor = CAST(ROUND(Amount * POWER(10, MinorUnits), 0) AS BIGINT)`, where `MinorUnits` comes from `cfg.Currency` (JOD = 3 → fils; USD/EUR = 2).
 - **All comparisons, joins, and sums use `AmountMinor` (integer).** Decimal comparison across systems produces phantom differences; integer comparison cannot.
-- Fee rounding is **per transaction** to the fils, then summed. Summing first and rounding last yields a different netting figure than the counterparty's — the most common cause of netting discrepancies that never close.
+- Fee rounding is **per transaction** to the minor unit, then summed. Summing first and rounding last yields a different netting figure than the counterparty's — the most common cause of netting discrepancies that never close.
 
 ---
 
@@ -373,7 +378,7 @@ The JOPACC summary may arrive **inside the session file or from a separate API**
 
 Generic, per counterparty:
 
-**`FeeSchedule` / `FeeTier`** — direction, transaction type, amount band (in fils), calculation type (Fixed / Percentage / Fixed+Percentage), value, min/max cap, `EffectiveFrom` / `EffectiveTo`, counterparty.
+**`FeeSchedule` / `FeeTier`** — direction, transaction type, amount band (in minor units), calculation type (Fixed / Percentage / Fixed+Percentage), value, min/max cap, `EffectiveFrom` / `EffectiveTo`, counterparty.
 
 **Applicability** is a configuration flag per source/transaction type — confirmed that some reconciliation reports carry fees and some do not.
 
@@ -401,6 +406,35 @@ Effective dating is mandatory: a tariff change must never retroactively alter la
 **Search at this volume:** SQL Server with correct indexes covers exact-reference and date-range lookups. **Elasticsearch is not recommended now** — real operational overhead, and nothing in the requirements is a free-text search problem. Revisit only if that changes.
 
 **Original file integrity:** stored on filesystem / object storage with SHA-256 and metadata in the database — **not as database blobs**. At 2M/day the blob path leads straight to an unmanageable database (the OJM lesson). Archive policy is defined at build time.
+
+### 13.1 Front-end stack (decided)
+
+**HTML, Bootstrap 5, jQuery and plain JavaScript. No SPA framework, no build step, no CDN.**
+
+The libraries are vendored into `ui/vendor/` and served from the application. A
+reconciliation portal inside a bank's network must not depend on an outbound
+request to a third party to render its own page, and an air-gapped deployment
+must not require a Node toolchain to produce a stylesheet.
+
+What this buys, and what it costs:
+
+| | |
+|---|---|
+| **Fits the screens we actually have** | Configuration forms, dense tables, and a rule builder. All are server-rendered pages with local interactivity — not a client-side application with its own state machine |
+| **One less runtime to secure and patch** | No npm dependency tree shipped to production. The three vendored files are pinned, reviewed, and replaced deliberately |
+| **Any .NET developer can maintain it** | No framework-specific expertise needed to add a field to a form |
+| **The cost** | Rendering is string concatenation in jQuery, so every screen must escape its own output. `Recon.escapeHtml()` exists for exactly this and is used on every interpolated value — a missed call is an XSS bug, and that is the standing review item for all front-end changes |
+
+The rule builder is the one screen with real client-side state (ordered passes,
+each with a variable number of conditions). It re-renders from a plain JavaScript
+array on every change and uses delegated event handlers — simple enough to hold
+in one's head, and the reason no framework is needed.
+
+**The condition tree is validated on the client for immediate feedback and on the
+server as the actual boundary.** `ui/js/condition-tree.js` rejects a field code
+that is not in the dataset's registry, and one that is in it but not marked
+matchable; the identical check runs server-side, because a client-side validator
+is a courtesy to Operations, never a security control.
 
 ---
 
@@ -441,7 +475,13 @@ Effective dating is mandatory: a tariff change must never retroactively alter la
 3. **Retention period** — 1 year? 7 years for audit? Drives partitioning and archive design.
 4. **OM view/SP performance** — can it return a full day's window efficiently, and is its date column indexed? The likeliest bottleneck in the pipeline.
 5. **Sessions per day and their timing** — drives the scheduler and "file not received" thresholds.
-6. **Runtime DDL acceptable?** (§7) — decides generated tables vs typed slots.
+
+> **Closed in v1.0.** "Runtime DDL acceptable?" was still listed here as a
+> Phase-1 blocker while §7 already recorded the opposite: typed slot columns,
+> decision confirmed, with the reasoning that generated tables would require
+> granting the application `CREATE TABLE` in a production financial database.
+> The question is answered — the schema in `db/` is slot-based — and a developer
+> reading §15 should no longer see a settled decision presented as a blocker.
 
 **Before the Interchange module:**
 7. **Rounding mode** — half-up, half-even, or truncate? Must match the counterparty exactly or netting will never tie out.

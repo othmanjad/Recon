@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <RootNamespace>Recon.Engine</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Recon.Domain/Recon.Domain.csproj" />
+    <!-- The runner orchestrates the compilers in this assembly against the
+         repositories in Recon.Data, so it needs both. Acyclic: Recon.Data
+         references only Recon.Domain. -->
+    <ProjectReference Include="../Recon.Data/Recon.Data.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.2" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
+  </ItemGroup>
+</Project>

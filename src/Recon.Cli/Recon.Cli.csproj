@@ -1,0 +1,11 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>Recon.Cli</RootNamespace>
+    <AssemblyName>recon</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Recon.Engine/Recon.Engine.csproj" />
+    <ProjectReference Include="../Recon.Data/Recon.Data.csproj" />
+  </ItemGroup>
+</Project>

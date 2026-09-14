@@ -1,0 +1,46 @@
+@{
+    var controller = ViewContext.RouteData.Values["controller"]?.ToString() ?? "Home";
+
+    string Active(string name) =>
+        string.Equals(controller, name, StringComparison.OrdinalIgnoreCase) ? " active" : string.Empty;
+}
+<nav class="nav flex-column" aria-label="Main">
+    <div class="rc-nav-group">Operations</div>
+    <a class="nav-link@(Active("Home"))" asp-controller="Home" asp-action="Index">
+        <i class="bi bi-speedometer2" aria-hidden="true"></i><span>Run dashboard</span>
+    </a>
+    <a class="nav-link@(Active("Runs"))" asp-controller="Runs" asp-action="Index">
+        <i class="bi bi-play-circle" aria-hidden="true"></i><span>Runs</span>
+    </a>
+    <a class="nav-link@(Active("Exceptions"))" asp-controller="Exceptions" asp-action="Index">
+        <i class="bi bi-exclamation-triangle" aria-hidden="true"></i><span>Exceptions</span>
+    </a>
+    <a class="nav-link@(Active("Reports"))" asp-controller="Reports" asp-action="Index">
+        <i class="bi bi-file-earmark-spreadsheet" aria-hidden="true"></i><span>Reports</span>
+    </a>
+
+    <div class="rc-nav-group">Configuration</div>
+    <a class="nav-link@(Active("Counterparties"))" asp-controller="Counterparties" asp-action="Index">
+        <i class="bi bi-diagram-3" aria-hidden="true"></i><span>Counterparties</span>
+    </a>
+    <a class="nav-link@(Active("Datasets"))" asp-controller="Datasets" asp-action="Index">
+        <i class="bi bi-table" aria-hidden="true"></i><span>Datasets &amp; fields</span>
+    </a>
+    <a class="nav-link@(Active("Rules"))" asp-controller="Rules" asp-action="Index">
+        <i class="bi bi-sliders" aria-hidden="true"></i><span>Rule builder</span>
+    </a>
+    <a class="nav-link@(Active("Fees"))" asp-controller="Fees" asp-action="Index">
+        <i class="bi bi-percent" aria-hidden="true"></i><span>Fees &amp; interchange</span>
+    </a>
+    <a class="nav-link@(Active("Schedules"))" asp-controller="Schedules" asp-action="Index">
+        <i class="bi bi-clock" aria-hidden="true"></i><span>Schedules &amp; alerts</span>
+    </a>
+
+    <div class="rc-nav-group">Admin</div>
+    <a class="nav-link@(Active("Settings"))" asp-controller="Settings" asp-action="Index">
+        <i class="bi bi-gear" aria-hidden="true"></i><span>Platform settings</span>
+    </a>
+    <a class="nav-link@(Active("Audit"))" asp-controller="Audit" asp-action="Index">
+        <i class="bi bi-journal-text" aria-hidden="true"></i><span>Audit log</span>
+    </a>
+</nav>

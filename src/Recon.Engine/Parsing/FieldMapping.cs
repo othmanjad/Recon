@@ -29,6 +29,15 @@ public sealed record FileFormat
     public DateOnly EffectiveFrom { get; init; }
     public DateOnly? EffectiveTo { get; init; }
     public CsvOptions Csv { get; init; } = new();
+
+    /// <summary>
+    /// For XML and JSON: the path to the repeating record. An XML format
+    /// cannot be read without it — the reader would not know where one record
+    /// ends and the next begins — and a JSON format defaults to the root
+    /// array.
+    /// </summary>
+    public string? RecordPath { get; init; }
+
     public string? FileNamePattern { get; init; }
 
     /// <summary>

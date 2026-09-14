@@ -1,0 +1,87 @@
+@*
+    The portal shell. Bootstrap and jQuery are served from wwwroot/vendor,
+    pinned and committed — a reconciliation portal inside a bank's network
+    must not depend on an outbound request to a third party to render its own
+    page (design §13.1).
+*@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>@ViewData["Title"] · Reconciliation Platform</title>
+    <link rel="stylesheet" href="~/vendor/bootstrap.min.css">
+    <link rel="stylesheet" href="~/vendor/bootstrap-icons.css">
+    <link rel="stylesheet" href="~/css/recon.css">
+</head>
+<body>
+
+<header class="rc-header">
+    <div class="d-flex align-items-center h-100 px-3 gap-3">
+        <button class="btn btn-sm btn-outline-secondary d-lg-none" type="button"
+                data-bs-toggle="offcanvas" data-bs-target="#rc-offcanvas"
+                aria-controls="rc-offcanvas" aria-label="Open navigation">
+            <i class="bi bi-list" aria-hidden="true"></i>
+        </button>
+        <a class="rc-brand text-decoration-none" asp-controller="Home" asp-action="Index">Reconciliation Platform</a>
+        <span class="badge text-bg-light border d-none d-md-inline">v1.0</span>
+        <div class="ms-auto d-flex align-items-center gap-3">
+            <span class="rc-help d-none d-sm-inline">Asia/Amman · UTC+3</span>
+            @if (User.Identity?.IsAuthenticated == true)
+            {
+                <span class="d-inline-flex align-items-center gap-2">
+                    <i class="bi bi-person-circle" aria-hidden="true"></i>
+                    <span class="d-none d-sm-inline">@User.Identity.Name</span>
+                </span>
+                <form asp-controller="Account" asp-action="SignOutOperator" method="post" class="m-0">
+                    <button class="btn btn-sm btn-outline-secondary" type="submit">Sign out</button>
+                </form>
+            }
+            else
+            {
+                <a class="btn btn-sm btn-outline-secondary" asp-controller="Account" asp-action="SignIn">Sign in</a>
+            }
+        </div>
+    </div>
+</header>
+
+<div class="d-flex">
+    <div class="rc-sidebar-wrap">
+        <aside class="rc-sidebar">
+            <partial name="_Nav" />
+        </aside>
+    </div>
+    <main class="rc-main flex-grow-1">
+        @if (TempData["Ok"] is string ok)
+        {
+            <div class="alert alert-success alert-dismissible" role="alert">
+                <i class="bi bi-check-circle"></i> @ok
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+        }
+        @if (TempData["Error"] is string err)
+        {
+            <div class="alert alert-danger alert-dismissible" role="alert">
+                <i class="bi bi-exclamation-octagon"></i> @err
+                <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+        }
+        @RenderBody()
+    </main>
+</div>
+
+<div class="offcanvas offcanvas-start" tabindex="-1" id="rc-offcanvas">
+    <div class="offcanvas-header">
+        <h5 class="offcanvas-title">Menu</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas" aria-label="Close"></button>
+    </div>
+    <div class="offcanvas-body p-0">
+        <partial name="_Nav" />
+    </div>
+</div>
+
+<script src="~/vendor/jquery.min.js"></script>
+<script src="~/vendor/bootstrap.bundle.min.js"></script>
+@await RenderSectionAsync("Scripts", required: false)
+</body>
+</html>

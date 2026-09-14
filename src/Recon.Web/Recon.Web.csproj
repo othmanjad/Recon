@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <RootNamespace>Recon.Web</RootNamespace>
+    <AssemblyName>Recon.Web</AssemblyName>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../Recon.Engine/Recon.Engine.csproj" />
+  </ItemGroup>
+</Project>

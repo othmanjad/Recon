@@ -55,6 +55,17 @@ without it, a normalized companion can overwrite a mapped field.
   unmanageable database.
 - **No `UPDATE` or `DELETE` grant on schema `aud`, to any role.**
 
+## Verification
+
+```bash
+./db/tests/run.sh
+```
+
+Builds the schema on a throwaway SQL Server 2022 container and runs 28
+metadata checks plus 55 behavioural tests. See `db/tests/README.md` —
+including the two bugs the behavioural suite caught that no amount of
+reading the script would have found.
+
 ## Open items
 
 Six questions remain, all business answers rather than design work — see

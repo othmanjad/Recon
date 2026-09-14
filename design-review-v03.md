@@ -275,6 +275,104 @@ a constraint that reads correctly and does something else.
 
 ---
 
+## Third pass — executed against a live instance
+
+**Method:** the schema was built on SQL Server 2022 and exercised, rather than
+read. `./db/tests/run.sh` reproduces it: 28 metadata checks and 55 behavioural
+tests, the latter writing bad data and requiring the database to refuse it.
+
+The v1.0 pass had concluded with the schema *parse-checked but never executed*,
+and said so. Executing it found three defects that no amount of reading would
+have surfaced — two of them constraints that were present, correctly named, and
+did nothing at all.
+
+| # | Finding | Severity | Status |
+|---|---------|----------|--------|
+| 1 | Case-insensitive collation let a wrong-case enum value through every `CHECK` | **BLOCKER** | Fixed |
+| 2 | `CK_ControlTotal_Period` never rejected anything, because of three-valued logic | HIGH | Fixed |
+| 3 | The script cannot be deployed by sqlcmd or CI: filtered indexes need `QUOTED_IDENTIFIER ON` | HIGH | Fixed |
+
+### X1 · BLOCKER · A case-insensitive `CHECK` is not a vocabulary
+
+`CK_ReconRun_Type` lists `'Sandbox'`. SQL Server's default collation is
+case-insensitive, so `RunType = 'sandbox'` satisfies it — and is stored exactly
+as typed.
+
+Inside the database this is harmless: `UX_ReconRun_Current`, whose filter reads
+`RunType <> 'Sandbox'`, also compares case-insensitively and excludes the row
+correctly. The damage is at the boundary. **C# string comparison is
+case-sensitive**, so `run.RunType != "Sandbox"` is *true* for `'sandbox'`: the
+database excludes the run from its uniqueness scope while the application
+includes it in period aggregates. That is precisely the divergence finding 8
+added the constraint to prevent, and the constraint permitted it.
+
+**Fix applied:** all 43 enumeration whitelists collate
+`Latin1_General_CS_AS`, so the stored value is always canonical and a wrong-case
+value is refused at the door. Four tests cover it across `RunType`,
+`MatchStatus`, `Status` and `ProviderType`.
+
+This generalises past this schema: **any enum column an application compares as
+a string in code needs a case-sensitive constraint**, or the database and the
+code disagree about what the value is.
+
+### X2 · HIGH · A guard that rejected nothing
+
+```sql
+CONSTRAINT CK_ControlTotal_Period CHECK (Scope <> 'Period' OR PeriodDays > 0)
+```
+
+For a `Period`-scoped row with `PeriodDays` NULL: the left side is `FALSE`, the
+right is `UNKNOWN`, and `FALSE OR UNKNOWN` is `UNKNOWN`. A `CHECK` constraint
+rejects only on `FALSE` — so the row was accepted, and a period-scoped control
+total could be configured with no window at all.
+
+**Fix applied:** `OR (PeriodDays IS NOT NULL AND PeriodDays > 0)`. Every other
+`OR`-guarded constraint in the schema was then audited for the same trap; all
+24 state their NULL explicitly, and the four that deliberately permit NULL
+(`FeeTier.AmountToMinor` for an open-ended top tier, the two `EffectiveTo`
+guards, `ReconRun` self-reference) do so intentionally.
+
+The lesson is worth stating because it recurs: in a `CHECK`, an `OR` whose
+right side can evaluate to NULL silently disables the constraint.
+
+### X3 · HIGH · The script could not be deployed by its own tooling
+
+The very first execution failed on the first filtered index:
+
+> Msg 1934: CREATE INDEX failed because the following SET options have incorrect
+> settings: 'QUOTED_IDENTIFIER'.
+
+Filtered indexes and indexes on computed columns require `QUOTED_IDENTIFIER ON`
+and `ANSI_NULLS ON`. SSMS sets both; **sqlcmd sets `QUOTED_IDENTIFIER OFF`**. So
+the schema would have deployed by hand and failed in any CI pipeline or
+automated release — the worst possible place to discover it.
+
+**Fix applied:** the script sets both options itself, before the first
+`CREATE SCHEMA`, and is now independent of whichever client runs it. Verified by
+running it with no client flags at all.
+
+### What execution confirmed that review could not
+
+- The **slot-pool trigger** actually refuses a companion slot used as primary
+  storage, a type mismatch, and a shared companion — the silent
+  data-corruption path from finding 2, closed and proven closed.
+- The **filtered unique index** on `NormalizedSlot` permits many NULLs, which is
+  the defect the v1.0 pass caught in its own first draft. Now a standing
+  regression test.
+- **`StagingRunId`** resolves to the source run on a `Rematch` and to the run's
+  own id otherwise — read back from the persisted computed column, not inferred.
+- The **audit grants** work as intended, tested as real role members via
+  `EXECUTE AS USER`: `recon_reader` can read the log, neither it nor
+  `recon_app` can rewrite or delete it, and `recon_loader` cannot touch
+  configuration. Finding 5 is closed against live permissions rather than
+  against `sys.database_permissions`.
+- **Partition routing** places three business dates in three distinct monthly
+  partitions.
+- A **6.2 KB condition tree** stores intact, where the old `NVARCHAR(1000)`
+  columns would have truncated it without complaint.
+
+---
+
 ## What changed in the artifacts
 
 **v0.3**
@@ -289,6 +387,7 @@ a constraint that reads correctly and does something else.
 - **`db/02-seed.sql`** — currencies, the split slot catalogue, and `cfg.PlatformSetting`.
 - **`db/03-roles.sql`** — the four least-privilege roles, with the `aud` read path fixed.
 - **`db/04-database-options.sql`** — `READ_COMMITTED_SNAPSHOT`, as a statement rather than a comment.
+- **`db/tests/`** — `01-verify-schema.sql` (28 metadata checks), `02-behaviour.sql` (55 tests that require the database to refuse bad data), and `run.sh`, which builds the schema on a throwaway SQL Server container and runs both. Docker is the only prerequisite.
 - **`ui/`** — the portal prototype: run dashboard, exception workspace, dataset/field registry, rule builder, counterparties, settings. HTML + Bootstrap 5 + jQuery, libraries vendored, no build step.
 
 ## Still open

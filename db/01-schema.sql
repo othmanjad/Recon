@@ -31,6 +31,22 @@
    Run order: 01-schema.sql, 02-seed.sql, 03-roles.sql, 04-database-options.sql
    ===================================================================== */
 
+/* ---------------------------------------------------------------------
+   REQUIRED SET OPTIONS — do not remove.
+
+   Filtered indexes and indexes on computed columns cannot be created
+   unless QUOTED_IDENTIFIER and ANSI_NULLS are ON. SSMS sets both by
+   default; sqlcmd sets QUOTED_IDENTIFIER OFF, so a deployment through
+   sqlcmd or a CI pipeline fails on the first filtered index without
+   these two lines. Setting them here makes the script independent of
+   whichever client runs it.
+   --------------------------------------------------------------------- */
+SET ANSI_NULLS ON;
+GO
+SET QUOTED_IDENTIFIER ON;
+GO
+
+
 CREATE SCHEMA cfg;   -- configuration, portal-managed
 GO
 CREATE SCHEMA ops;   -- operational data
@@ -80,7 +96,9 @@ CREATE TABLE cfg.PlatformSetting (
     Description         NVARCHAR(500) NOT NULL,
     ModifiedAt          DATETIME2(3)  NOT NULL DEFAULT SYSDATETIME(),
     ModifiedBy          NVARCHAR(300) NULL,
-    CONSTRAINT CK_PlatformSetting_Type CHECK (DataType IN ('Int','Decimal','Bool','String'))
+    CONSTRAINT CK_PlatformSetting_Type CHECK
+(DataType COLLATE Latin1_General_CS_AS IN
+ ('Int','Decimal','Bool','String'))
 );
 GO
 
@@ -126,7 +144,9 @@ CREATE TABLE cfg.Dataset (
     ActivatedAt         DATETIME2(3) NULL,
     CreatedAt           DATETIME2(3) NOT NULL DEFAULT SYSDATETIME(),
     CreatedBy           NVARCHAR(300) NOT NULL,
-    CONSTRAINT CK_Dataset_Provider CHECK (ProviderType IN ('File','Sql','Api'))
+    CONSTRAINT CK_Dataset_Provider CHECK
+(ProviderType COLLATE Latin1_General_CS_AS IN
+ ('File','Sql','Api'))
 );
 GO
 
@@ -151,7 +171,8 @@ CREATE TABLE cfg.StorageSlotCatalogue (
     MaxLength           INT NULL,
     IsNormalizedOnly    BIT NOT NULL DEFAULT 0,             -- companion pool, never a StorageSlot
     CONSTRAINT CK_SlotCatalogue_Type CHECK
-        (SlotType IN ('String','Integer','Decimal','DateTime','Boolean'))
+(SlotType COLLATE Latin1_General_CS_AS IN
+ ('String','Integer','Decimal','DateTime','Boolean'))
 );
 GO
 
@@ -187,7 +208,8 @@ CREATE TABLE cfg.DatasetField (
     -- ONE field per dataset without a companion slot — and most fields
     -- have none.
     CONSTRAINT CK_DatasetField_Type CHECK
-        (DataType IN ('String','Integer','Decimal','DateTime','Boolean')),
+(DataType COLLATE Latin1_General_CS_AS IN
+ ('String','Integer','Decimal','DateTime','Boolean')),
     -- FIX (finding, C7): FieldRole was an uncontrolled comment. The
     -- engine reads semantics from this column (it looks for the field
     -- whose role is Amount, never for a field named "Amount"), so a typo
@@ -277,7 +299,8 @@ CREATE TABLE cfg.FileFormatDefinition (
     FileNamePattern     NVARCHAR(400) NULL,        -- regex for validation
     MaxParseErrors      INT          NOT NULL DEFAULT 1000,  -- E4: abort the file beyond this
     CONSTRAINT CK_FileFormat_Type CHECK
-        (FormatType IN ('Csv','Xml','Json','FixedWidth')),
+(FormatType COLLATE Latin1_General_CS_AS IN
+ ('Csv','Xml','Json','FixedWidth')),
     CONSTRAINT CK_FileFormat_Effective CHECK (EffectiveTo IS NULL OR EffectiveTo >= EffectiveFrom),
     CONSTRAINT UQ_FileFormat_Version UNIQUE (DatasetId, Version)
 );
@@ -317,7 +340,9 @@ CREATE TABLE cfg.SqlSourceDefinition (
     -- condition tree used by rules, compiled by the same single class.
     FilterJson          NVARCHAR(MAX) NULL,
     CommandTimeoutSec   INT NOT NULL DEFAULT 600,
-    CONSTRAINT CK_SqlSource_Type CHECK (ObjectType IN ('View','StoredProcedure')),
+    CONSTRAINT CK_SqlSource_Type CHECK
+(ObjectType COLLATE Latin1_General_CS_AS IN
+ ('View','StoredProcedure')),
     CONSTRAINT CK_SqlSource_Filter CHECK (FilterJson IS NULL OR ISJSON(FilterJson) = 1)
 );
 GO
@@ -331,9 +356,11 @@ CREATE TABLE cfg.SqlSourceParameter (
     DataType            VARCHAR(20)  NOT NULL,
     CONSTRAINT UQ_SqlSourceParameter UNIQUE (SqlSourceId, ParameterName),
     CONSTRAINT CK_SqlSourceParam_Type CHECK
-        (DataType IN ('String','Integer','Decimal','DateTime','Boolean')),
+(DataType COLLATE Latin1_General_CS_AS IN
+ ('String','Integer','Decimal','DateTime','Boolean')),
     CONSTRAINT CK_SqlSourceParam_Source CHECK
-        (ValueSource IN ('RunDate','RunDateFrom','RunDateTo','SessionRef','Constant')),
+(ValueSource COLLATE Latin1_General_CS_AS IN
+ ('RunDate','RunDateFrom','RunDateTo','SessionRef','Constant')),
     CONSTRAINT CK_SqlSourceParam_Constant CHECK
         (ValueSource <> 'Constant' OR ConstantValue IS NOT NULL)
 );
@@ -370,7 +397,9 @@ CREATE TABLE cfg.AcquisitionDefinition (
     StorageRootPath     NVARCHAR(400) NOT NULL,    -- original files live on disk, not in the DB
     RetryCount          INT NOT NULL DEFAULT 3,
     RetryDelaySeconds   INT NOT NULL DEFAULT 60,
-    CONSTRAINT CK_Acquisition_Method CHECK (Method IN ('Api','Sftp','Folder','Manual'))
+    CONSTRAINT CK_Acquisition_Method CHECK
+(Method COLLATE Latin1_General_CS_AS IN
+ ('Api','Sftp','Folder','Manual'))
 );
 GO
 
@@ -420,10 +449,15 @@ CREATE TABLE cfg.MatchRule (
     IsActive            BIT NOT NULL DEFAULT 1,
     CONSTRAINT UQ_MatchRule UNIQUE (DefinitionId, Sequence),
     CONSTRAINT UQ_MatchRule_Code UNIQUE (DefinitionId, RuleCode),
-    CONSTRAINT CK_MatchRule_Card CHECK (Cardinality IN ('OneToOne','OneToMany')),
+    CONSTRAINT CK_MatchRule_Card CHECK
+(Cardinality COLLATE Latin1_General_CS_AS IN
+ ('OneToOne','OneToMany')),
     CONSTRAINT CK_MatchRule_Multi CHECK
-        (OnMultipleMatch IN ('MarkAmbiguous','TakeEarliest','Fail')),
-    CONSTRAINT CK_MatchRule_Mode CHECK (MatchMode IN ('Row','Aggregate')),
+(OnMultipleMatch COLLATE Latin1_General_CS_AS IN
+ ('MarkAmbiguous','TakeEarliest','Fail')),
+    CONSTRAINT CK_MatchRule_Mode CHECK
+(MatchMode COLLATE Latin1_General_CS_AS IN
+ ('Row','Aggregate')),
     CONSTRAINT CK_MatchRule_AggFn CHECK
         (AggregateFunction IS NULL OR AggregateFunction IN ('Sum','Count','SumAndCount')),
     -- Aggregate mode without a group key is a full-dataset sum by accident.
@@ -451,7 +485,8 @@ CREATE TABLE cfg.MatchCondition (
     ToleranceValue      BIGINT NULL,                -- minor units, or numeric span
     ToleranceUnit       VARCHAR(20) NULL,           -- MinorUnit|Minute|Hour|Day
     Sequence            INT NOT NULL DEFAULT 1,
-    CONSTRAINT CK_MatchCondition_Cmp CHECK (ComparisonType IN
+    CONSTRAINT CK_MatchCondition_Cmp CHECK
+(ComparisonType COLLATE Latin1_General_CS_AS IN
         ('Exact','NumericExact','NumericTolerance',
          'DateExact','DateWithin','StartsWith','EndsWith','Contains')),
     CONSTRAINT CK_MatchCondition_Unit CHECK
@@ -494,9 +529,14 @@ CREATE TABLE cfg.ClassificationRule (
     -- ActionType is ReportOnly in this phase. AutoPost exists as a seam
     -- for future Failed Inward posting; it is not implemented.
     CONSTRAINT CK_Classification_Action CHECK
-        (ActionType IN ('ReportOnly','AutoClose','AutoPost')),
-    CONSTRAINT CK_Classification_Side CHECK (AppliesToSide IN ('Left','Right','Both')),
-    CONSTRAINT CK_Classification_Severity CHECK (Severity IN ('Low','Normal','High','Critical')),
+(ActionType COLLATE Latin1_General_CS_AS IN
+ ('ReportOnly','AutoClose','AutoPost')),
+    CONSTRAINT CK_Classification_Side CHECK
+(AppliesToSide COLLATE Latin1_General_CS_AS IN
+ ('Left','Right','Both')),
+    CONSTRAINT CK_Classification_Severity CHECK
+(Severity COLLATE Latin1_General_CS_AS IN
+ ('Low','Normal','High','Critical')),
     CONSTRAINT CK_Classification_Json CHECK (ISJSON(ConditionJson) = 1),
     CONSTRAINT UQ_Classification_Seq UNIQUE (DefinitionId, Sequence)
 );
@@ -521,12 +561,22 @@ CREATE TABLE cfg.ControlTotalDefinition (
     FailRunOnMismatch   BIT NOT NULL DEFAULT 1,     -- a net difference fails the run
     IsActive            BIT NOT NULL DEFAULT 1,
     CONSTRAINT UQ_ControlTotal_Code UNIQUE (DefinitionId, CheckCode),
-    CONSTRAINT CK_ControlTotal_Scope CHECK (Scope IN ('Run','BusinessDate','Period')),
+    CONSTRAINT CK_ControlTotal_Scope CHECK
+(Scope COLLATE Latin1_General_CS_AS IN
+ ('Run','BusinessDate','Period')),
     CONSTRAINT CK_ControlTotal_SrcA CHECK
-        (SourceTypeA IN ('Staging','MatchResult','RunAggregate','Dataset')),
+(SourceTypeA COLLATE Latin1_General_CS_AS IN
+ ('Staging','MatchResult','RunAggregate','Dataset')),
     CONSTRAINT CK_ControlTotal_SrcB CHECK
-        (SourceTypeB IN ('Staging','MatchResult','RunAggregate','Dataset')),
-    CONSTRAINT CK_ControlTotal_Period CHECK (Scope <> 'Period' OR PeriodDays > 0),
+(SourceTypeB COLLATE Latin1_General_CS_AS IN
+ ('Staging','MatchResult','RunAggregate','Dataset')),
+    -- FIX (v1.0, found by execution): the original read
+    --   (Scope <> 'Period' OR PeriodDays > 0)
+    -- With PeriodDays NULL that is FALSE OR UNKNOWN = UNKNOWN, and a CHECK
+    -- only rejects on FALSE — so a Period-scoped check with no window was
+    -- accepted. Three-valued logic needs the NULL stated explicitly.
+    CONSTRAINT CK_ControlTotal_Period CHECK
+        (Scope <> 'Period' OR (PeriodDays IS NOT NULL AND PeriodDays > 0)),
     CONSTRAINT CK_ControlTotal_JsonA CHECK (ISJSON(SourceAExpressionJson) = 1),
     CONSTRAINT CK_ControlTotal_JsonB CHECK (ISJSON(SourceBExpressionJson) = 1)
 );
@@ -558,10 +608,13 @@ CREATE TABLE cfg.AlertPolicy (
     -- FIX (E6): the design promised a match-distribution-drift signal but
     -- left the event type as an uncontrolled comment. Constrained now, so
     -- a typo cannot silently disable an alert.
-    CONSTRAINT CK_AlertPolicy_Event CHECK (EventType IN
+    CONSTRAINT CK_AlertPolicy_Event CHECK
+(EventType COLLATE Latin1_General_CS_AS IN
         ('FileNotReceived','RunFailed','ControlTotalMismatch','ThresholdBreach',
          'MatchDistributionDrift','PartitionShortage','ParseErrorLimit')),
-    CONSTRAINT CK_AlertPolicy_Channel CHECK (Channel IN ('Email','Sms','Dashboard'))
+    CONSTRAINT CK_AlertPolicy_Channel CHECK
+(Channel COLLATE Latin1_General_CS_AS IN
+ ('Email','Sms','Dashboard'))
 );
 GO
 
@@ -592,9 +645,15 @@ CREATE TABLE cfg.FeeSchedule (
     EffectiveTo         DATE          NULL,
     IsActive            BIT NOT NULL DEFAULT 1,
     CONSTRAINT UQ_FeeSchedule_Code UNIQUE (CounterpartyId, Code),
-    CONSTRAINT CK_FeeSchedule_Party CHECK (FeeParty IN ('Revenue','Cost')),
-    CONSTRAINT CK_FeeSchedule_Direction CHECK (Direction IN ('Inward','Outward')),
-    CONSTRAINT CK_FeeSchedule_Round CHECK (RoundingMode IN ('HalfUp','HalfEven','Truncate')),
+    CONSTRAINT CK_FeeSchedule_Party CHECK
+(FeeParty COLLATE Latin1_General_CS_AS IN
+ ('Revenue','Cost')),
+    CONSTRAINT CK_FeeSchedule_Direction CHECK
+(Direction COLLATE Latin1_General_CS_AS IN
+ ('Inward','Outward')),
+    CONSTRAINT CK_FeeSchedule_Round CHECK
+(RoundingMode COLLATE Latin1_General_CS_AS IN
+ ('HalfUp','HalfEven','Truncate')),
     CONSTRAINT CK_FeeSchedule_Effective CHECK (EffectiveTo IS NULL OR EffectiveTo >= EffectiveFrom)
 );
 GO
@@ -610,7 +669,8 @@ CREATE TABLE cfg.FeeTier (
     MinFeeMinor         BIGINT NULL,
     MaxFeeMinor         BIGINT NULL,
     CONSTRAINT CK_FeeTier_Calc CHECK
-        (CalculationType IN ('Fixed','Percentage','FixedPlusPercentage')),
+(CalculationType COLLATE Latin1_General_CS_AS IN
+ ('Fixed','Percentage','FixedPlusPercentage')),
     CONSTRAINT CK_FeeTier_Band CHECK (AmountToMinor IS NULL OR AmountToMinor > AmountFromMinor),
     CONSTRAINT CK_FeeTier_Cap CHECK
         (MinFeeMinor IS NULL OR MaxFeeMinor IS NULL OR MaxFeeMinor >= MinFeeMinor)
@@ -665,8 +725,11 @@ CREATE TABLE cfg.ReportDefinition (
     IsActive            BIT NOT NULL DEFAULT 1,
     CONSTRAINT UQ_ReportDefinition_Code UNIQUE (DefinitionId, Code),
     CONSTRAINT CK_Report_Scope CHECK
-        (DataScope IN ('Matched','Unmatched','Exceptions','ControlTotals','All')),
-    CONSTRAINT CK_Report_Format CHECK (OutputFormat IN ('Xlsx','Csv')),
+(DataScope COLLATE Latin1_General_CS_AS IN
+ ('Matched','Unmatched','Exceptions','ControlTotals','All')),
+    CONSTRAINT CK_Report_Format CHECK
+(OutputFormat COLLATE Latin1_General_CS_AS IN
+ ('Xlsx','Csv')),
     CONSTRAINT CK_Report_FilterJson CHECK (FilterJson IS NULL OR ISJSON(FilterJson) = 1),
     CONSTRAINT CK_Report_SortJson CHECK (SortJson IS NULL OR ISJSON(SortJson) = 1)
 );
@@ -700,7 +763,9 @@ CREATE TABLE cfg.UserCounterpartyAccess (
     GrantedAt           DATETIME2(3) NOT NULL DEFAULT SYSDATETIME(),
     GrantedBy           NVARCHAR(300) NOT NULL,
     CONSTRAINT UQ_UserCounterparty UNIQUE (UserName, CounterpartyId),
-    CONSTRAINT CK_AccessLevel CHECK (AccessLevel IN ('Read','Operate','Configure'))
+    CONSTRAINT CK_AccessLevel CHECK
+(AccessLevel COLLATE Latin1_General_CS_AS IN
+ ('Read','Operate','Configure'))
 );
 GO
 
@@ -753,13 +818,15 @@ CREATE TABLE ops.ReconRun (
     TriggeredBy         NVARCHAR(300) NOT NULL,
 
     CONSTRAINT CK_ReconRun_Status CHECK
-        (Status IN ('Pending','Running','Completed','Failed','Cancelled','Rejected','Resuming')),
+(Status COLLATE Latin1_General_CS_AS IN
+ ('Pending','Running','Completed','Failed','Cancelled','Rejected','Resuming')),
     -- FIX (v1.0, finding 8): RunType never had a CHECK, yet
     -- UX_ReconRun_Current filters on RunType <> 'Sandbox'. A typo such as
     -- 'sandbox' would silently pull a sandbox run into the uniqueness
     -- scope and into period aggregates.
     CONSTRAINT CK_ReconRun_Type CHECK
-        (RunType IN ('Scheduled','Manual','Rerun','Rematch','Sandbox')),
+(RunType COLLATE Latin1_General_CS_AS IN
+ ('Scheduled','Manual','Rerun','Rematch','Sandbox')),
     -- A Rematch without a source run has nothing to rematch.
     CONSTRAINT CK_ReconRun_Rematch CHECK
         (RunType <> 'Rematch' OR SourceRunId IS NOT NULL),
@@ -795,11 +862,13 @@ CREATE TABLE ops.ReconRunStep (
     -- B3 · Each step is a checkpoint; Resume re-executes from the first
     -- non-completed step. Acquire and Parse are idempotent by file hash;
     -- a pass is idempotent by (RunId, MatchRuleId).
-    CONSTRAINT CK_RunStep_Name CHECK (StepName IN
+    CONSTRAINT CK_RunStep_Name CHECK
+(StepName COLLATE Latin1_General_CS_AS IN
         ('Acquire','Parse','Stage','Exclude','Duplicates','Match',
          'Classify','AutoClose','ControlTotals','Aggregate','Fees','Report')),
     CONSTRAINT CK_RunStep_Status CHECK
-        (Status IN ('Pending','Running','Completed','Failed','Skipped'))
+(Status COLLATE Latin1_General_CS_AS IN
+ ('Pending','Running','Completed','Failed','Skipped'))
 );
 GO
 CREATE INDEX IX_ReconRunStep_Run ON ops.ReconRunStep (RunId, StepName);
@@ -821,7 +890,8 @@ CREATE TABLE ops.SourceFile (
     ErrorCnt            BIGINT NULL,
     CONSTRAINT PK_SourceFile PRIMARY KEY (SourceFileId, BusinessDate),
     CONSTRAINT CK_SourceFile_Status CHECK
-        (Status IN ('Received','Parsing','Parsed','Failed','Duplicate'))
+(Status COLLATE Latin1_General_CS_AS IN
+ ('Received','Parsing','Parsed','Failed','Duplicate'))
 ) ON ps_ByMonth(BusinessDate);
 GO
 -- Same content received twice is a duplicate, not a second run.
@@ -901,7 +971,8 @@ CREATE TABLE stg.StagingTransaction (
     CreatedAt           DATETIME2(3) NOT NULL DEFAULT SYSDATETIME(),
 
     CONSTRAINT CK_Staging_MatchStatus CHECK
-        (MatchStatus IN ('Unmatched','Matched','Ambiguous','AutoClosed','Excluded','Duplicate'))
+(MatchStatus COLLATE Latin1_General_CS_AS IN
+ ('Unmatched','Matched','Ambiguous','AutoClosed','Excluded','Duplicate'))
 ) ON ps_ByMonth(TxDate);
 GO
 
@@ -981,7 +1052,8 @@ CREATE TABLE stg.ParseError (
     -- E4: a wrong-format file would otherwise yield 2M rows with RawLine.
     -- cfg.FileFormatDefinition.MaxParseErrors caps this per file.
     CONSTRAINT CK_ParseError_Type CHECK
-        (ErrorType IN ('MissingRequired','TypeConversion','FormatInvalid','RowShape','Unknown'))
+(ErrorType COLLATE Latin1_General_CS_AS IN
+ ('MissingRequired','TypeConversion','FormatInvalid','RowShape','Unknown'))
 ) ON ps_ByMonth(BusinessDate);
 GO
 CREATE CLUSTERED INDEX CIX_ParseError ON stg.ParseError (RunId, BusinessDate, ParseErrorId)
@@ -1013,7 +1085,8 @@ CREATE TABLE ops.MatchResult (
     RightAggregateKey   NVARCHAR(300) NULL,
     CreatedAt           DATETIME2(3) NOT NULL DEFAULT SYSDATETIME(),
     CONSTRAINT CK_MatchResult_Status CHECK
-        (MatchStatus IN ('Matched','Ambiguous','AmountDifference','Unmatched')),
+(MatchStatus COLLATE Latin1_General_CS_AS IN
+ ('Matched','Ambiguous','AmountDifference','Unmatched')),
     -- A result that references neither side is not a result.
     CONSTRAINT CK_MatchResult_Sides CHECK
         (LeftStagingId IS NOT NULL OR RightStagingId IS NOT NULL)
@@ -1074,8 +1147,11 @@ CREATE TABLE ops.ReconException (
     ClosedBy            NVARCHAR(300) NULL,
     CreatedAt           DATETIME2(3) NOT NULL DEFAULT SYSDATETIME(),
     CONSTRAINT CK_Exception_Status CHECK
-        (Status IN ('Open','InProgress','Resolved','AutoClosed','WrittenOff')),
-    CONSTRAINT CK_Exception_Side CHECK (Side IN ('Left','Right')),
+(Status COLLATE Latin1_General_CS_AS IN
+ ('Open','InProgress','Resolved','AutoClosed','WrittenOff')),
+    CONSTRAINT CK_Exception_Side CHECK
+(Side COLLATE Latin1_General_CS_AS IN
+ ('Left','Right')),
     CONSTRAINT CK_Exception_Keys CHECK (KeyValuesJson IS NULL OR ISJSON(KeyValuesJson) = 1),
     CONSTRAINT CK_Exception_Closed CHECK
         (Status NOT IN ('Resolved','AutoClosed','WrittenOff') OR ClosedAt IS NOT NULL)
@@ -1137,9 +1213,12 @@ CREATE TABLE ops.RunAggregate (
     CurrencyCode        CHAR(3) NOT NULL REFERENCES cfg.Currency(CurrencyCode),
     CreatedAt           DATETIME2(3) NOT NULL DEFAULT SYSDATETIME(),
     CONSTRAINT UQ_RunAggregate UNIQUE (RunId, DatasetId, Side, GroupKey, MatchStatus),
-    CONSTRAINT CK_RunAggregate_Side CHECK (Side IN ('Left','Right')),
+    CONSTRAINT CK_RunAggregate_Side CHECK
+(Side COLLATE Latin1_General_CS_AS IN
+ ('Left','Right')),
     CONSTRAINT CK_RunAggregate_Status CHECK
-        (MatchStatus IN ('*','Matched','Unmatched','Ambiguous','Excluded','Duplicate','AutoClosed'))
+(MatchStatus COLLATE Latin1_General_CS_AS IN
+ ('*','Matched','Unmatched','Ambiguous','Excluded','Duplicate','AutoClosed'))
 );
 GO
 /* Period-scoped control totals sum across a date range. They must use
@@ -1173,8 +1252,12 @@ CREATE TABLE ops.TransactionFee (
     FeeParty            VARCHAR(20) NOT NULL,       -- Revenue | Cost
     Direction           VARCHAR(20) NOT NULL,
     CreatedAt           DATETIME2(3) NOT NULL DEFAULT SYSDATETIME(),
-    CONSTRAINT CK_TransactionFee_Party CHECK (FeeParty IN ('Revenue','Cost')),
-    CONSTRAINT CK_TransactionFee_Direction CHECK (Direction IN ('Inward','Outward'))
+    CONSTRAINT CK_TransactionFee_Party CHECK
+(FeeParty COLLATE Latin1_General_CS_AS IN
+ ('Revenue','Cost')),
+    CONSTRAINT CK_TransactionFee_Direction CHECK
+(Direction COLLATE Latin1_General_CS_AS IN
+ ('Inward','Outward'))
     -- OPEN (design §15 Q8): sales tax on fees — applicable, and at which
     -- stage? If it applies, a tax column set lands here and a rate table
     -- in cfg. Do not model it until the answer is known.
@@ -1226,7 +1309,8 @@ CREATE TABLE aud.AuditLog (
     -- FIX (v1.0, D3): 'Export' was missing. The audit log captured config
     -- changes but not READS of sensitive exports — who downloaded which
     -- report, when. Regulators ask.
-    CONSTRAINT CK_AuditLog_Action CHECK (Action IN
+    CONSTRAINT CK_AuditLog_Action CHECK
+(Action COLLATE Latin1_General_CS_AS IN
         ('Create','Update','Delete','Activate','Deactivate',
          'Execute','Resume','Close','Reopen','Export','Login'))
 ) ON ps_ByMonth(AuditDate);

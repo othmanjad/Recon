@@ -60,7 +60,7 @@ exception.**
 | Area | State |
 |------|-------|
 | Design document | v1.0, reviewed twice |
-| Database schema | Complete and consolidated — 38 tables, parse-checked, not yet deployed |
+| Database schema | Complete, consolidated, and **executed** — 38 tables, built on SQL Server 2022 with 83 passing tests |
 | Portal | Prototype: six screens, browser-verified, reading mock data |
 | Engine (.NET) | **Not started** |
 
@@ -68,19 +68,32 @@ Six questions remain open. All are business answers rather than design work, all
 have a place to live in the schema already, and none blocks the Phase 1 build —
 see `design-review-v03.md`, "Still open".
 
-### A note on what is verified and what is not
+### A note on what is verified
 
-The schema is **parse-checked, not executed.** All 77 batches parse as T-SQL, and
-a consistency pass confirms every foreign-key target exists, no constraint or
-index name is duplicated, and no legacy identifier survives. It has never been
-run against a SQL Server instance, because none is available in this
-environment — so `GRANT`, the partition functions, and the slot-pool trigger are
-reviewed by eye rather than executed. **Run `db/` against a scratch instance
-before trusting it.**
+**The schema is executed, not just parsed.** `./db/tests/run.sh` builds it on a
+throwaway SQL Server 2022 container and runs 28 metadata checks and 55
+behavioural tests — the second suite writes bad data and requires the database
+to refuse it. Docker is the only prerequisite.
 
-The portal **is** executed: 20 unit tests for the condition-tree validator, and
-a Chromium pass that drives all six screens and fails on any console error or
+Running it mattered. Two constraints were present, correctly named, and did
+nothing:
+
+- A case-insensitive collation let `RunType = 'sandbox'` satisfy a `CHECK`
+  listing `'Sandbox'`. SQL Server would then treat the two as equal while C#
+  would not, so an application filtering `RunType != "Sandbox"` would pull a
+  sandbox run into production aggregates.
+- `Scope <> 'Period' OR PeriodDays > 0` accepted a `Period` check with no
+  window, because `FALSE OR UNKNOWN` is `UNKNOWN` and a `CHECK` rejects only on
+  `FALSE`.
+
+Executing it also caught a deployment hazard: filtered indexes require
+`QUOTED_IDENTIFIER ON`, which SSMS sets and **sqlcmd does not** — so the script
+now sets it itself rather than failing in whatever CI pipeline runs it first.
+
+**The portal is executed too:** 20 unit tests for the condition-tree validator
+and a Chromium pass that drives all six screens, failing on any console error or
 horizontal overflow at phone width.
 
-The .NET engine has not been started in part because the SDK cannot be installed
-here — the environment's network policy blocks the Microsoft download host.
+**The .NET engine has not been started.** The SDK cannot be installed in this
+environment — the network policy blocks Microsoft's download host — though
+`mcr.microsoft.com` is reachable, so an SDK container is a viable route.

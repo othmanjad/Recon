@@ -176,8 +176,66 @@ async function submit(page, locator, timeout = 120000) {
     check(!/Install failed/.test(body), "a second install failed");
 
     // =================================================================
+    // 3b. An installed platform nobody administers. Creating the FIRST
+    //     counterparty cannot require a grant on a counterparty that does
+    //     not exist — and before this was true, a production install that
+    //     skipped the demo data had no way in but an INSERT by hand.
+    // =================================================================
+    await page.goto(BASE + "/counterparties", { waitUntil: "load" });
+    body = await page.locator("body").innerText();
+
+    check(/Nobody administers this platform yet/.test(body),
+        "an unadministered platform does not say so on the counterparties screen");
+
+    await page.fill("#code", "FIRSTRUN_BANK");
+    await page.fill("#name", "First run bank");
+    await submit(page, page.locator('form[action*="/Counterparties/SaveCounterparty"] button[type="submit"]'), 60000);
+
+    body = await page.locator("body").innerText();
+
+    check(/FIRSTRUN_BANK created/.test(body),
+        `the first counterparty could not be created: ${firstLine(body)}`);
+    check(/first administrator/.test(body),
+        "creating the first counterparty did not say that it made the creator an administrator");
+
+    /* And the vacancy closes behind them. A second operator arriving at the
+       same platform is not its administrator, and the refusal says what to do
+       instead of only what was refused. */
+    const stranger = await browser.newContext({ viewport: { width: 1200, height: 900 } });
+    const other = await stranger.newPage();
+    watch(other);
+
+    await other.goto(BASE + "/account/signin", { waitUntil: "load" });
+    await other.fill("#userName", "second.operator");
+    await submit(other, other.locator('button[type="submit"]'), 30000);
+
+    await other.goto(BASE + "/counterparties", { waitUntil: "load" });
+    let strangerBody = await other.locator("body").innerText();
+
+    check(!/Nobody administers this platform yet/.test(strangerBody),
+        "the platform still claims to be unadministered after its first administrator");
+
+    await other.fill("#code", "STRANGER_BANK");
+    await other.fill("#name", "Should not exist");
+    await submit(other, other.locator('form[action*="/Counterparties/SaveCounterparty"] button[type="submit"]'), 60000);
+
+    strangerBody = await other.locator("body").innerText();
+
+    check(/this platform has an administrator/.test(strangerBody),
+        `a second operator was not refused: ${firstLine(strangerBody)}`);
+    check(!/STRANGER_BANK created/.test(strangerBody),
+        "a user with no grants created a counterparty anyway");
+
+    await stranger.close();
+
+    // =================================================================
     // 4. An installed but empty platform, then the demo configuration.
     // =================================================================
+    // Back to /setup: the section above navigated away, and `body` is
+    // whatever page was last read.
+    await page.goto(BASE + "/setup", { waitUntil: "load" });
+    body = await page.locator("body").innerText();
+
     check(/3 · Something to work with/.test(body),
         "the setup screen does not offer to put something in the database");
 

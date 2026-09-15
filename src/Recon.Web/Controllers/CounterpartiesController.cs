@@ -67,6 +67,12 @@ public sealed class CounterpartiesController(
                 ? await GrantsForAsync(selected.CounterpartyId).ConfigureAwait(false)
                 : null;
 
+        // Only asked when it can be true, so the ordinary case costs no
+        // query: somebody holding a Configure grant cannot be looking at an
+        // unadministered platform.
+        ViewData["Unadministered"] = !grants.Values.Any(l => l >= AccessLevel.Configure)
+            && await access.PlatformIsUnadministeredAsync().ConfigureAwait(false);
+
         ViewData["MyGrants"] = grants;
         return View();
     }
@@ -105,10 +111,28 @@ public sealed class CounterpartiesController(
         // "administers something" — and the creator is granted Configure on
         // what they just created, or they would be unable to see it.
         var myGrants = await access.GrantsAsync(User).ConfigureAwait(false);
+        var bootstrap = false;
+
         if (!myGrants.Values.Any(l => l >= AccessLevel.Configure))
         {
-            TempData["Error"] = "Creating a counterparty requires Configure access on the platform.";
-            return RedirectToAction(nameof(Index));
+            // Unless nobody administers this platform at all. A freshly
+            // installed database that skipped the demo configuration has no
+            // counterparties, therefore no grants, therefore nobody who could
+            // ever create the first one: the check refused everybody and the
+            // only way in was an INSERT by hand. Filling that vacancy is the
+            // same rule the setup screen's claim button follows, and it closes
+            // behind the first administrator.
+            bootstrap = await access.PlatformIsUnadministeredAsync().ConfigureAwait(false);
+
+            if (!bootstrap)
+            {
+                TempData["Error"] =
+                    "Creating a counterparty needs Configure access to at least one counterparty " +
+                    "already — it is a platform-level act, and this platform has an administrator. " +
+                    "Ask one of them for a Configure grant, which they give on this screen.";
+
+                return RedirectToAction(nameof(Index));
+            }
         }
 
         try
@@ -142,7 +166,11 @@ public sealed class CounterpartiesController(
             await audit.RecordAsync(User, "Counterparty", id, AuditAction.Create,
                 after: new { code, name, isActive }).ConfigureAwait(false);
 
-            TempData["Ok"] = $"{code} created, and you were granted Configure access to it.";
+            TempData["Ok"] = bootstrap
+                ? $"{code} created. Nobody administered this platform, so you were granted " +
+                  "Configure access to it and are now its first administrator — the next person " +
+                  "needs a grant from you."
+                : $"{code} created, and you were granted Configure access to it.";
             return RedirectToAction(nameof(Index), new { id });
         }
         catch (Microsoft.Data.SqlClient.SqlException ex)

@@ -49,6 +49,33 @@ public sealed class AccessService(SqlConnection connection, IHttpContextAccessor
         user?.FindFirst(ClaimTypes.Name)?.Value ?? "anonymous";
 
     /// <summary>
+    /// True when nobody on this platform holds Configure anywhere.
+    ///
+    /// <para>
+    /// This is the bootstrap question, and it has to be asked because
+    /// creating the FIRST counterparty cannot require a grant scoped to a
+    /// counterparty that does not exist yet. On a freshly installed platform
+    /// that skipped the demo configuration there were no counterparties, so
+    /// there were no grants, so "Creating a counterparty requires Configure
+    /// access" refused everyone — and the only way in was an INSERT by hand,
+    /// which is precisely what this portal exists to make unnecessary.
+    /// </para>
+    ///
+    /// <para>
+    /// It is the same rule the setup screen's claim button follows: fill a
+    /// vacancy, never take a seat somebody is sitting in. The moment one
+    /// Configure grant exists anywhere, this is false and the ordinary check
+    /// applies again.
+    /// </para>
+    /// </summary>
+    public async Task<bool> PlatformIsUnadministeredAsync(
+        CancellationToken cancellationToken = default) =>
+        await Db.ScalarAsync<int>(
+            _connection,
+            "SELECT COUNT(*) FROM cfg.UserCounterpartyAccess WHERE AccessLevel = 'Configure';",
+            cancellationToken: cancellationToken).ConfigureAwait(false) == 0;
+
+    /// <summary>
     /// The counterparties this user may see, and at what level.
     ///
     /// An empty result means no access to anything — which is the correct

@@ -111,7 +111,7 @@ There is no step in operating this platform that needs a shell.
 | Editing `appsettings.json` and restarting | `/setup` — server, database, credentials, file storage, tested before saving |
 | `sqlcmd -i db/01-schema.sql` × 4 | *Create the database and install*, with a ledger of what has been applied and what has changed since |
 | `demo/01-demo-config.sql` by hand | *Load the demo configuration* |
-| The first grant, inserted by hand | *Grant me access to unadministered counterparties* — it only ever fills a vacancy, so it cannot be used to get into a counterparty somebody already administers |
+| The first grant, inserted by hand | *Grant me access to unadministered counterparties* on `/setup` — it only ever fills a vacancy, so it cannot be used to get into a counterparty somebody already administers. On a platform with no counterparties at all, the first one created makes its creator the platform's first administrator, for the same reason and with the same limit |
 | `recon run --left-file … --right-file …` | **Upload a session and reconcile it** on `/runs`: two files in, a reconciled run out |
 | `INSERT cfg.Dataset` / `FileFormatDefinition` / `FieldMapping` | The dataset, format and mapping editors on `/datasets` — a counterparty can be onboarded without SQL |
 | `INSERT cfg.ExclusionRule` / `ClassificationRule` / `ControlTotalDefinition` | The three rule-set editors on `/rules`, each validated through the field registry |

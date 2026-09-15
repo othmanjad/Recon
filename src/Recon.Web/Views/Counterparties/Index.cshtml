@@ -6,6 +6,7 @@
     var datasets = (List<DatasetRow>)ViewData["Datasets"]!;
     var grants = ViewData["Grants"] as List<GrantRow>;
     var myGrants = (Dictionary<int, AccessLevel>)ViewData["MyGrants"]!;
+    var unadministered = ViewData["Unadministered"] is true;
     var canConfigure = selected is not null
         && myGrants.TryGetValue(selected.CounterpartyId, out var myLevel)
         && myLevel >= AccessLevel.Configure;
@@ -35,6 +36,25 @@
     still have leaked them through counts and totals. CliQ is one configured counterparty here, not
     the product.
 </div>
+
+@if (unadministered)
+{
+    @*
+        The bootstrap case, said out loud rather than discovered by pressing a
+        button and being refused: creating the first counterparty cannot
+        require a grant on a counterparty that does not exist.
+    *@
+    <div class="alert alert-warning d-flex gap-2 align-items-start">
+        <i class="bi bi-person-plus fs-5" aria-hidden="true"></i>
+        <div class="small">
+            <strong>Nobody administers this platform yet.</strong> The first counterparty created
+            here grants its creator Configure access, and from then on access is by grant only —
+            so the next person needs one from whoever goes first. If a counterparty already exists
+            and has no administrator, <a asp-controller="Setup" asp-action="Index">the setup
+            screen</a> will hand it to you instead.
+        </div>
+    </div>
+}
 
 <div class="rc-card mb-3">
     <div class="rc-card-head">

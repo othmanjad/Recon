@@ -165,6 +165,17 @@ that exists to report "this script failed, here is the server's message"
 answered 500 with a stack trace instead. Both were invisible on a first run,
 which is the only kind of run either had ever had.
 
+Driving an **installed but empty** platform — a production install that skips
+the demo data — found the dead end behind all of it: there were no
+counterparties, therefore no grants, therefore **nobody who could create the
+first one**. The check for "may this person create a counterparty" asked for
+Configure access to a counterparty, which is the one thing that cannot exist
+yet, so the only way into a freshly installed platform was an `INSERT` by hand
+— precisely what this portal exists to make unnecessary. The first counterparty
+created on a platform nobody administers now makes its creator that platform's
+first administrator, and the vacancy closes behind them: the second person
+needs a grant, and the refusal says so.
+
 Driving the **onboarding** path — create a counterparty, two datasets, their
 registries, formats, mappings, a definition, a pass, rules, then upload two
 files and reconcile them — found the two that made the Phase 3 exit criterion

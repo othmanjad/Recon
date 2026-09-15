@@ -411,10 +411,12 @@ Effective dating is mandatory: a tariff change must never retroactively alter la
 
 **HTML, Bootstrap 5, jQuery and plain JavaScript. No SPA framework, no build step, no CDN.**
 
-The libraries are vendored into `ui/vendor/` and served from the application. A
-reconciliation portal inside a bank's network must not depend on an outbound
-request to a third party to render its own page, and an air-gapped deployment
-must not require a Node toolchain to produce a stylesheet.
+The libraries are vendored into the application and served from it —
+`src/Recon.Web/wwwroot/vendor/` for the portal, `ui/vendor/` for the prototype
+that preceded it. A reconciliation portal inside a bank's network must not
+depend on an outbound request to a third party to render its own page, and an
+air-gapped deployment must not require a Node toolchain to produce a
+stylesheet.
 
 What this buys, and what it costs:
 
@@ -510,6 +512,14 @@ is a courtesy to Operations, never a security control.
 The Phase 3 exit criterion is deliberately harsh: if a second counterparty cannot be onboarded without a developer, the platform was not built — only a CliQ tool with extra tables.
 
 XML/JSON readers sit in Phase 7 on purpose: the architecture already supports them, and building them before a real non-CSV file exists means building against an imagined format.
+
+### 16.1 What is built
+
+All seven phases are implemented and executed. The schema runs on SQL Server 2022 with 88 passing tests; the engine has 165 unit and 10 integration tests and meets every budget in §4 at 2,000,000 rows per side; the portal is ASP.NET Core MVC over the real database, driven in Chromium by 126 assertions across twelve screens, three access levels and an account with no grants. `./demo/run-demo.sh` reconciles a session from nothing and `./demo/run-portal.sh` serves the portal against it, with Docker as the only prerequisite.
+
+The Phase 3 exit criterion is not something a test can assert: onboarding a second counterparty unassisted is a claim about what an Operations user can do, and it is settled by watching one of them do it. What the portal can show is that nothing in that sequence needs a developer — a counterparty, its datasets, their field registries, a definition, its passes, a dry-run and an activation are all screens, and `demo/01-demo-config.sql` is the same rows written as SQL for a script that must not need a browser.
+
+The six open questions in §15 remain open. Each is a business answer, each has a place in the schema already, and the portal surfaces two of them where the decision is taken rather than in a document: the rounding mode on a fee schedule says HalfUp is a default and not a decision, and the retention period on the settings screen is flagged as a placeholder.
 
 ---
 

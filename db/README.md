@@ -1,6 +1,28 @@
 # Database
 
-The reconciliation platform schema for SQL Server. Run the scripts in order:
+The reconciliation platform schema for SQL Server.
+
+**None of these scripts creates the database**, and none of them contains a
+`USE`: they build the schema in whichever database they are connected to. So
+either let the portal do it — `/setup` runs `CREATE DATABASE` and then these
+four files, recording each with the hash of its text — or create it yourself
+first and point the client at it:
+
+```sql
+CREATE DATABASE ReconPlatform;   -- any name; nothing depends on this one
+```
+
+```bash
+for f in db/01-schema.sql db/02-seed.sql db/03-roles.sql db/04-database-options.sql; do
+    sqlcmd -S localhost -U sa -P '...' -d ReconPlatform -b -i "$f" || break
+done
+```
+
+`-d` is the part that matters: without it the scripts build the schema in
+`master`. `-b` stops on the first error instead of carrying on into the next
+script.
+
+Run the scripts in order:
 
 | # | Script | What it does |
 |---|--------|--------------|
@@ -10,8 +32,15 @@ The reconciliation platform schema for SQL Server. Run the scripts in order:
 | 4 | `04-database-options.sql` | `READ_COMMITTED_SNAPSHOT`, plus the maintenance-job outlines |
 
 Requires SQL Server 2016 or later (`ISJSON`, `STRING_SPLIT`-era T-SQL).
-`04-database-options.sql` names the database `[ReconPlatform]` and takes an
-exclusive lock, so run it in a maintenance window.
+`04-database-options.sql` applies to whichever database it is run in
+(`QUOTENAME(DB_NAME())`) and takes an exclusive lock with
+`ROLLBACK IMMEDIATE`, so run it in a maintenance window rather than on a live
+loader.
+
+Two scripts do the whole thing for you, if Docker is all you have:
+`./db/tests/run.sh` builds the schema on a throwaway SQL Server and runs both
+test suites against it; `./demo/run-demo.sh` goes further and reconciles a
+session.
 
 ## The five things worth knowing before reading the schema
 

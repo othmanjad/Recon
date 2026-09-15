@@ -1,0 +1,288 @@
+@model ExceptionWorkspaceModel
+@{
+    var filter = Model.Filter;
+    var open = Model.Rows.Count(r => r.IsOpen);
+    var aged = Model.Rows.Count(r => r.IsOpen && r.AgeDays > 7);
+    var unassigned = Model.Rows.Count(r => r.IsOpen && string.IsNullOrEmpty(r.AssignedTo));
+}
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+    <h1 class="h4 mb-0">Exceptions</h1>
+    <span class="rc-help">@Model.Rows.Count row(s) shown · filtered in SQL by your counterparty grants</span>
+</div>
+
+@if (!Model.HasAnyAccess)
+{
+    <div class="alert alert-info" role="alert">
+        <strong>You have no counterparty grants</strong>, so this workspace is empty by rule rather
+        than because there is nothing open.
+    </div>
+}
+
+<div class="row g-3 mb-3">
+    <div class="col-sm-4">
+        <div class="rc-tile">
+            <div class="rc-tile-label">Open</div>
+            <div class="rc-tile-value @(open > 0 ? "text-danger" : null)">@Fmt.Count(open)</div>
+            <div class="rc-tile-sub">Open or InProgress</div>
+        </div>
+    </div>
+    <div class="col-sm-4">
+        <div class="rc-tile">
+            <div class="rc-tile-label">Older than 7 days</div>
+            <div class="rc-tile-value @(aged > 0 ? "text-danger" : null)">@Fmt.Count(aged)</div>
+            <div class="rc-tile-sub">aging is computed on the indexed business date</div>
+        </div>
+    </div>
+    <div class="col-sm-4">
+        <div class="rc-tile">
+            <div class="rc-tile-label">Unassigned</div>
+            <div class="rc-tile-value">@Fmt.Count(unassigned)</div>
+            <div class="rc-tile-sub">nobody is looking at these yet</div>
+        </div>
+    </div>
+</div>
+
+<div class="rc-card mb-3">
+    <div class="rc-card-head"><h2>Filter</h2></div>
+    <div class="p-3">
+        <form method="get" asp-action="Index" class="row g-2 align-items-end">
+            <div class="col-md-3">
+                <label class="form-label" for="code">Exception code</label>
+                <select class="form-select form-select-sm" id="code" name="code">
+                    <option value="">Any</option>
+                    @foreach (var code in Model.Codes)
+                    {
+                        <option value="@code.Code" selected="@(filter.ExceptionCode == code.Code)">
+                            @code.Code — @code.DisplayName
+                        </option>
+                    }
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label" for="status">Status</label>
+                <select class="form-select form-select-sm" id="status" name="status">
+                    <option value="">Any</option>
+                    @foreach (var status in new[] { "Open", "InProgress", "Resolved", "Rejected", "AutoClosed" })
+                    {
+                        <option value="@status" selected="@(filter.Status == status)">@status</option>
+                    }
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label" for="definitionId">Definition</label>
+                <select class="form-select form-select-sm" id="definitionId" name="definitionId">
+                    <option value="">Any</option>
+                    @foreach (var definition in Model.Definitions)
+                    {
+                        <option value="@definition.DefinitionId" selected="@(filter.DefinitionId == definition.DefinitionId)">
+                            @definition.Code
+                        </option>
+                    }
+                </select>
+            </div>
+            <div class="col-md-1">
+                <label class="form-label" for="minAge">Min age</label>
+                <input class="form-control form-control-sm" type="number" min="0" id="minAge"
+                       name="minAge" value="@(filter.MinAgeDays?.ToString())">
+            </div>
+            <div class="col-md-1">
+                <label class="form-label" for="maxAge">Max age</label>
+                <input class="form-control form-control-sm" type="number" min="0" id="maxAge"
+                       name="maxAge" value="@(filter.MaxAgeDays?.ToString())">
+            </div>
+            <div class="col-md-2">
+                <label class="form-label" for="search">Reference starts with</label>
+                <input class="form-control form-control-sm" id="search" name="search"
+                       value="@filter.Search" placeholder="E2E…">
+            </div>
+            <div class="col-12 d-flex gap-2 mt-2">
+                <button class="btn btn-sm btn-primary" type="submit">Apply</button>
+                <a class="btn btn-sm btn-outline-secondary" asp-action="Index">Reset</a>
+                @*
+                    A prefix match, so the index on the reference can still
+                    seek. A leading wildcard would scan, and this box is used
+                    constantly.
+                *@
+                <span class="rc-help align-self-center">
+                    The reference search is a prefix match on purpose: a leading wildcard would scan
+                    the staging table, and this box is used constantly.
+                </span>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="rc-card">
+    <div class="rc-card-head">
+        <h2>Workspace</h2>
+        <span class="rc-help">closing an exception requires a reason</span>
+    </div>
+    <div class="rc-table-scroll">
+        <table class="table rc-table table-hover align-middle">
+            <thead>
+                <tr>
+                    <th>Id</th><th>Definition</th><th>Business date</th><th class="text-end">Age</th>
+                    <th>Side</th><th>Code</th><th class="text-end">Amount</th>
+                    <th>Status</th><th>Assigned</th><th>Resolution</th><th>Run</th><th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @if (Model.Rows.Count == 0)
+                {
+                    <tr><td colspan="12" class="rc-empty">Nothing matches this filter.</td></tr>
+                }
+                @foreach (var row in Model.Rows)
+                {
+                    <tr>
+                        <td class="rc-mono">@row.ExceptionId</td>
+                        <td class="rc-mono">@row.DefinitionCode</td>
+                        <td class="rc-mono">@row.BusinessDate.ToString("yyyy-MM-dd")</td>
+                        <td class="rc-num @(row.IsOpen && row.AgeDays > 7 ? "rc-num-neg" : null)">@row.AgeDays d</td>
+                        <td class="rc-help">@row.Side</td>
+                        <td>
+                            @{
+                                var codeRow = Model.Codes.FirstOrDefault(c => c.Code == row.ExceptionCode);
+                                var tone = codeRow?.Severity switch
+                                {
+                                    "Critical" => "danger",
+                                    "High" => "warning",
+                                    "Medium" => "info",
+                                    _ => "light",
+                                };
+                            }
+                            <span class="badge text-bg-@tone @(tone == "light" ? "border" : null)">
+                                @row.ExceptionCode
+                            </span>
+                        </td>
+                        <td class="rc-num">
+                            @Fmt.Money(row.AmountMinor, row.CurrencyCode)
+                            <span class="rc-help">@row.CurrencyCode</span>
+                        </td>
+                        <td>@Fmt.StatusBadge(row.Status)</td>
+                        <td class="rc-help">@(row.AssignedTo ?? "—")</td>
+                        <td>
+                            @if (row.ResolutionCode is { Length: > 0 } resolution)
+                            {
+                                <div class="rc-mono">@resolution</div>
+                                <div class="rc-help">
+                                    @(row.ClosedBy ?? "—")
+                                    @if (row.ClosedByRunId is { } closedBy)
+                                    {
+                                        @* Closed by a later run's auto-close
+                                           rather than by a person: the run id
+                                           is the evidence. *@
+                                        <text> · auto-closed by run @closedBy</text>
+                                    }
+                                </div>
+                                @if (row.ResolutionNote is { Length: > 0 } note)
+                                {
+                                    <div class="rc-help text-truncate" style="max-width:220px" title="@note">@note</div>
+                                }
+                            }
+                            else
+                            {
+                                <span class="rc-help">—</span>
+                            }
+                        </td>
+                        <td class="rc-mono">
+                            <a asp-controller="Runs" asp-action="Detail" asp-route-id="@row.RunId">@row.RunId</a>
+                        </td>
+                        <td class="text-end">
+                            <button class="btn btn-sm btn-outline-secondary rc-exception-open"
+                                    type="button"
+                                    data-id="@row.ExceptionId"
+                                    data-status="@row.Status"
+                                    data-assigned="@row.AssignedTo"
+                                    data-code="@row.ExceptionCode"
+                                    data-keys="@row.KeyValuesJson"
+                                    data-bs-toggle="modal" data-bs-target="#rc-exception-modal">
+                                Work
+                            </button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="modal fade" id="rc-exception-modal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Exception <span id="rc-ex-id" class="rc-mono"></span></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                @*
+                    The key values were snapshotted onto the exception at
+                    classification time. That is why an exception survives the
+                    staging purge: the row it points at may be gone, but what
+                    identified it is not.
+                *@
+                <div class="mb-3">
+                    <div class="rc-tile-label">Identifying values, snapshotted when the exception was raised</div>
+                    <pre class="rc-mono mb-0 p-2 bg-light border rounded" id="rc-ex-keys" style="max-height:160px;overflow:auto"></pre>
+                </div>
+
+                <div class="row g-3">
+                    <div class="col-md-6">
+                        <form asp-action="Assign" method="post" class="border rounded p-3 h-100">
+                            <input type="hidden" name="id" class="rc-ex-input-id">
+                            <div class="rc-tile-label mb-2">Assign</div>
+                            <label class="form-label" for="assignTo">Operator</label>
+                            <input class="form-control form-control-sm mb-2" id="assignTo" name="assignTo"
+                                   placeholder="leave empty to unassign">
+                            <button class="btn btn-sm btn-outline-primary" type="submit">Assign</button>
+                            <div class="form-text">Assigning an Open exception moves it to InProgress.</div>
+                        </form>
+                    </div>
+                    <div class="col-md-6">
+                        <form asp-action="Close" method="post" class="border rounded p-3 h-100">
+                            <input type="hidden" name="id" class="rc-ex-input-id">
+                            <div class="rc-tile-label mb-2">Close</div>
+                            <label class="form-label" for="status2">Outcome</label>
+                            <select class="form-select form-select-sm mb-2" id="status2" name="status">
+                                <option value="Resolved" selected>Resolved</option>
+                                <option value="Rejected">Rejected</option>
+                            </select>
+                            <label class="form-label" for="resolutionCode">Reason</label>
+                            <select class="form-select form-select-sm mb-2" id="resolutionCode"
+                                    name="resolutionCode" required>
+                                <option value="">Choose a reason…</option>
+                                <option value="LateArrival">LateArrival — matched in a later session</option>
+                                <option value="CounterpartyError">CounterpartyError — their file was wrong</option>
+                                <option value="OurError">OurError — our side was wrong</option>
+                                <option value="ManualMatch">ManualMatch — paired by hand</option>
+                                <option value="WriteOff">WriteOff — accepted difference</option>
+                                <option value="Duplicate">Duplicate — the source sent it twice</option>
+                            </select>
+                            <label class="form-label" for="note">Note</label>
+                            <textarea class="form-control form-control-sm mb-2" id="note" name="note"
+                                      rows="2" placeholder="what you found"></textarea>
+                            <button class="btn btn-sm btn-primary" type="submit">Close exception</button>
+                            <div class="form-text">
+                                The reason is required: an exception closed without one is
+                                indistinguishable from one nobody looked at.
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <form asp-action="Reopen" method="post" class="mt-3 d-flex gap-2 align-items-end">
+                    <input type="hidden" name="id" class="rc-ex-input-id">
+                    <div class="flex-grow-1">
+                        <label class="form-label" for="reopenNote">Reopen with a note</label>
+                        <input class="form-control form-control-sm" id="reopenNote" name="note"
+                               placeholder="why it is open again">
+                    </div>
+                    <button class="btn btn-sm btn-outline-danger" type="submit">Reopen</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+    <script src="~/js/exceptions.js"></script>
+}

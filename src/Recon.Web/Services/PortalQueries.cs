@@ -470,46 +470,46 @@ public sealed class PortalQueries(SqlConnection connection, AccessService access
             """;
 
         var rows = new List<ExceptionRow>();
-        using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
 
-        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        // Scoped deliberately: one connection serves the whole request, and
+        // this method runs two more queries below. A reader still open when
+        // they run made the whole screen fail with "there is already an open
+        // DataReader associated with this Connection" — which is not a
+        // symptom of a wrong query but of holding one open too long.
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken)
+            .ConfigureAwait(false))
         {
-            rows.Add(new ExceptionRow
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
             {
-                ExceptionId = reader.GetInt64(0),
-                RunId = reader.GetInt64(1),
-                DefinitionId = reader.GetInt32(2),
-                DefinitionCode = reader.GetString(3),
-                BusinessDate = DateOnly.FromDateTime(reader.GetDateTime(4)),
-                Side = reader.GetString(5),
-                ExceptionCode = reader.GetString(6),
-                AmountMinor = reader.IsDBNull(7) ? null : reader.GetInt64(7),
-                CurrencyCode = reader.IsDBNull(8) ? null : reader.GetString(8),
-                Status = reader.GetString(9),
-                AssignedTo = reader.IsDBNull(10) ? null : reader.GetString(10),
-                ResolutionCode = reader.IsDBNull(11) ? null : reader.GetString(11),
-                ResolutionNote = reader.IsDBNull(12) ? null : reader.GetString(12),
-                KeyValuesJson = reader.IsDBNull(13) ? null : reader.GetString(13),
-                ClosedByRunId = reader.IsDBNull(14) ? null : reader.GetInt64(14),
-                ClosedAt = reader.IsDBNull(15) ? null : reader.GetDateTime(15),
-                ClosedBy = reader.IsDBNull(16) ? null : reader.GetString(16),
-                AgeDays = reader.GetInt32(17),
-            });
+                rows.Add(new ExceptionRow
+                {
+                    ExceptionId = reader.GetInt64(0),
+                    RunId = reader.GetInt64(1),
+                    DefinitionId = reader.GetInt32(2),
+                    DefinitionCode = reader.GetString(3),
+                    BusinessDate = DateOnly.FromDateTime(reader.GetDateTime(4)),
+                    Side = reader.GetString(5),
+                    ExceptionCode = reader.GetString(6),
+                    AmountMinor = reader.IsDBNull(7) ? null : reader.GetInt64(7),
+                    CurrencyCode = reader.IsDBNull(8) ? null : reader.GetString(8),
+                    Status = reader.GetString(9),
+                    AssignedTo = reader.IsDBNull(10) ? null : reader.GetString(10),
+                    ResolutionCode = reader.IsDBNull(11) ? null : reader.GetString(11),
+                    ResolutionNote = reader.IsDBNull(12) ? null : reader.GetString(12),
+                    KeyValuesJson = reader.IsDBNull(13) ? null : reader.GetString(13),
+                    ClosedByRunId = reader.IsDBNull(14) ? null : reader.GetInt64(14),
+                    ClosedAt = reader.IsDBNull(15) ? null : reader.GetDateTime(15),
+                    ClosedBy = reader.IsDBNull(16) ? null : reader.GetString(16),
+                    AgeDays = reader.GetInt32(17),
+                });
+            }
         }
 
-        var codes = await Db.QueryAsync(
-            _connection,
-            """
-            SELECT DISTINCT ExceptionCode, DisplayName, Severity
-            FROM cfg.ClassificationRule WHERE IsActive = 1 ORDER BY ExceptionCode;
-            """,
-            r => new ExceptionCodeRow
-            {
-                Code = r.GetString(0),
-                DisplayName = r.GetString(1),
-                Severity = r.GetString(2),
-            },
-            cancellationToken: cancellationToken).ConfigureAwait(false);
+        // Filtered by grant like everything else. The codes are configuration
+        // of somebody's definition — "FAILED_INWARD", "MISSING_IN_CLIQ" name
+        // that partner's business, and a user with no grants was being shown
+        // the whole platform's vocabulary in a dropdown.
+        var codes = await CodesAsync(grants.Keys.ToList(), cancellationToken).ConfigureAwait(false);
 
         return new ExceptionWorkspaceModel
         {
@@ -520,6 +520,37 @@ public sealed class PortalQueries(SqlConnection connection, AccessService access
             Filter = filter,
             HasAnyAccess = grants.Count > 0,
         };
+    }
+
+    private async Task<List<ExceptionCodeRow>> CodesAsync(
+        IReadOnlyCollection<int> counterpartyIds, CancellationToken cancellationToken)
+    {
+        using var command = Db.Command(_connection, string.Empty);
+        var filter = AccessService.CounterpartyFilter("d", counterpartyIds, command);
+
+        command.CommandText = $"""
+            SELECT DISTINCT c.ExceptionCode, c.DisplayName, c.Severity
+            FROM cfg.ClassificationRule AS c
+            JOIN cfg.ReconciliationDefinition AS d ON d.DefinitionId = c.DefinitionId
+            WHERE c.IsActive = 1 AND {filter}
+            ORDER BY c.ExceptionCode;
+            """;
+
+        var rows = new List<ExceptionCodeRow>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken)
+            .ConfigureAwait(false);
+
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            rows.Add(new ExceptionCodeRow
+            {
+                Code = reader.GetString(0),
+                DisplayName = reader.GetString(1),
+                Severity = reader.GetString(2),
+            });
+        }
+
+        return rows;
     }
 
     public Task<List<SettingRow>> SettingsAsync(CancellationToken cancellationToken = default) =>

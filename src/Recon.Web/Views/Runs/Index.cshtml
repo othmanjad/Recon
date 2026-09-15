@@ -1,0 +1,87 @@
+@model DashboardModel
+@{
+    var canOperate = ViewData["CanOperate"] is true;
+    var today = DateOnly.FromDateTime(DateTime.Today);
+}
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+    <h1 class="h4 mb-0">Runs</h1>
+    <partial name="_RunFilters" model="Model" />
+</div>
+
+<div class="rc-card mb-3">
+    <div class="rc-card-head">
+        <h2>Trigger a run</h2>
+        <span class="rc-help">the scheduler does this unattended; this is the manual path</span>
+    </div>
+    <div class="p-3">
+        @if (!canOperate)
+        {
+            <div class="rc-help">
+                Triggering a run needs <strong>Operate</strong> access to the counterparty. You hold
+                read access, so the form is not shown rather than shown and refused.
+            </div>
+        }
+        else
+        {
+            @*
+                The application lock is what makes this safe alongside the
+                scheduler (review item B2): a second attempt for the same
+                definition and business date is refused and recorded as
+                Rejected rather than staging the same data twice.
+            *@
+            <form asp-action="Trigger" method="post" class="row g-3 align-items-end">
+                <div class="col-md-4">
+                    <label class="form-label" for="definitionId">Definition</label>
+                    <select class="form-select" id="definitionId" name="definitionId" required>
+                        @foreach (var definition in Model.Definitions.Where(d => d.IsActive))
+                        {
+                            <option value="@definition.DefinitionId">@definition.Code — @definition.Name</option>
+                        }
+                    </select>
+                    @if (!Model.Definitions.Any(d => d.IsActive))
+                    {
+                        <div class="form-text text-danger">
+                            No definition is active. A definition is activated only once it has the
+                            universal field roles and a first pass that can seek an index.
+                        </div>
+                    }
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label" for="businessDate">Business date</label>
+                    <input class="form-control" type="date" id="businessDate" name="businessDate"
+                           value="@today.ToString("yyyy-MM-dd")" required>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label" for="sessionRef">Session</label>
+                    <input class="form-control" id="sessionRef" name="sessionRef" placeholder="optional">
+                    <div class="form-text">e.g. a settlement session within the day.</div>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label" for="runType">Type</label>
+                    <select class="form-select" id="runType" name="runType">
+                        <option value="Manual" selected>Manual</option>
+                        <option value="Rerun">Rerun</option>
+                        <option value="Rematch">Rematch</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <button class="btn btn-primary w-100" type="submit">Run</button>
+                </div>
+            </form>
+
+            <div class="rc-help mt-3">
+                A second attempt for the same definition and business date is <em>refused</em>, not
+                queued: the run lock is held for the run's duration, and the refusal is recorded as
+                a <code>Rejected</code> run so the attempt is visible rather than lost.
+            </div>
+        }
+    </div>
+</div>
+
+<div class="rc-card">
+    <div class="rc-card-head">
+        <h2>All runs</h2>
+        <span class="rc-help">@Model.Runs.Count shown, newest first</span>
+    </div>
+    <partial name="_RunTable" model="Model.Runs" />
+</div>

@@ -1,0 +1,208 @@
+@using Recon.Domain.Configuration
+@using Recon.Web.Services
+@model SandboxResult
+@{
+    var definition = (ReconciliationDefinition)ViewData["Definition"]!;
+    var outcome = Model.Outcome;
+    var distribution = outcome.Distribution();
+}
+<div class="rc-crumb mb-2">
+    <a asp-action="Index" asp-route-id="@definition.DefinitionId">Rule builder</a> / dry-run
+</div>
+
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+    <h1 class="h4 mb-0">
+        Dry-run of @definition.Code
+        <span class="ms-2">@Fmt.StatusBadge(outcome.Status.ToString())</span>
+        <span class="badge text-bg-warning ms-1">Sandbox</span>
+    </h1>
+    <div class="d-flex gap-2">
+        <a class="btn btn-sm btn-outline-secondary" asp-controller="Runs" asp-action="Detail"
+           asp-route-id="@Model.RunId">Open as a run</a>
+        <a class="btn btn-sm btn-outline-secondary" asp-action="Index"
+           asp-route-id="@definition.DefinitionId">Back to the rules</a>
+    </div>
+</div>
+
+@*
+    A sandbox run writes to the same staging table as any other — that is
+    what makes its numbers trustworthy — but RunType = 'Sandbox' keeps it
+    out of the current-run scope and out of period aggregates, and a
+    nightly job purges its rows.
+*@
+<div class="alert alert-light border small">
+    Run <strong>@Model.RunId</strong> replayed the rows staged by run
+    <strong>@Model.SourceRunId</strong> (staging @Model.StagingRunId). It read those rows rather
+    than re-staging them, it is excluded from the current-run scope and from period aggregates,
+    and the nightly job purges it after <code>SandboxPurgeDays</code>.
+</div>
+
+@if (Model.ActivationProblems.Count > 0)
+{
+    <div class="alert alert-warning" role="alert">
+        <strong>This definition could not be activated as it stands</strong> — which is exactly what
+        a dry-run is for. It ran anyway:
+        <ul class="mb-0 mt-1 small">
+            @foreach (var problem in Model.ActivationProblems)
+            {
+                <li>@problem</li>
+            }
+        </ul>
+    </div>
+}
+
+@if (outcome.Error is { Length: > 0 } error)
+{
+    <div class="alert alert-danger" role="alert">
+        <strong>The dry-run failed:</strong> @error
+    </div>
+}
+
+<div class="row g-3 mb-3">
+    <div class="col-sm-6 col-xl-3">
+        <div class="rc-tile">
+            <div class="rc-tile-label">Rows</div>
+            <div class="rc-tile-value" style="font-size:18px">
+                @Fmt.Count(outcome.Counts.LeftRows) ↔ @Fmt.Count(outcome.Counts.RightRows)
+            </div>
+            <div class="rc-tile-sub">left ↔ right, as staged</div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+        <div class="rc-tile">
+            <div class="rc-tile-label">Matched</div>
+            <div class="rc-tile-value">@Fmt.Count(outcome.Counts.Matched)</div>
+            <div class="rc-tile-sub">
+                @{
+                    // Matched counts staged ROWS, and a matched pair is two of
+                    // them — one on each side. Dividing by the left side alone
+                    // produced "157.9% of the left side", which is arithmetic
+                    // nobody should have to decode.
+                    var staged = outcome.Counts.LeftRows + outcome.Counts.RightRows;
+                    var rate = staged <= 0 ? 0 : 100d * outcome.Counts.Matched / staged;
+                }
+                @rate.ToString("N1")% of the @Fmt.Count(staged) staged rows, both sides
+            </div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+        <div class="rc-tile">
+            <div class="rc-tile-label">Unmatched</div>
+            <div class="rc-tile-value @(outcome.Counts.Unmatched > 0 ? "text-danger" : null)">
+                @Fmt.Count(outcome.Counts.Unmatched)
+            </div>
+            <div class="rc-tile-sub">would become exceptions</div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+        <div class="rc-tile">
+            <div class="rc-tile-label">Ambiguous</div>
+            <div class="rc-tile-value @(outcome.Counts.Ambiguous > 0 ? "text-danger" : null)">
+                @Fmt.Count(outcome.Counts.Ambiguous)
+            </div>
+            <div class="rc-tile-sub">several candidates, none chosen</div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3">
+    <div class="col-xl-7">
+        <div class="rc-card h-100">
+            <div class="rc-card-head">
+                <h2>Per pass</h2>
+                <span class="rc-help">what each pass contributed, in order</span>
+            </div>
+            <div class="rc-table-scroll">
+                <table class="table rc-table align-middle">
+                    <thead>
+                        <tr>
+                            <th>#</th><th>Pass</th>
+                            <th class="text-end">Candidates</th>
+                            <th class="text-end">Matched</th>
+                            <th class="text-end">Ambiguous</th>
+                            <th class="text-end">Share</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (outcome.Passes.Count == 0)
+                        {
+                            <tr><td colspan="6" class="rc-empty">No pass ran.</td></tr>
+                        }
+                        @foreach (var pass in outcome.Passes)
+                        {
+                            var share = distribution.FirstOrDefault(d => d.Sequence == pass.Sequence).Share;
+                            <tr>
+                                <td><span class="rc-seq">@pass.Sequence</span></td>
+                                <td class="rc-mono">@pass.Code</td>
+                                <td class="rc-num">@Fmt.Count(pass.Candidates)</td>
+                                <td class="rc-num">@Fmt.Count(pass.Matched)</td>
+                                <td class="rc-num @(pass.Ambiguous > 0 ? "rc-num-neg" : null)">
+                                    @Fmt.Count(pass.Ambiguous)
+                                </td>
+                                <td class="rc-num">@share.ToString("N1")%</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <div class="p-3 rc-help">
+                Candidates is what the pass saw <em>before</em> deciding — a pass whose candidate
+                count is far above its matched count is matching too loosely, and one whose
+                ambiguous count is non-zero found several candidates for a single row and refused to
+                pick one.
+            </div>
+        </div>
+    </div>
+
+    <div class="col-xl-5">
+        <div class="rc-card h-100">
+            <div class="rc-card-head">
+                <h2>Control totals</h2>
+            </div>
+            <div class="rc-table-scroll">
+                <table class="table rc-table align-middle">
+                    <thead>
+                        <tr>
+                            <th>Check</th><th class="text-end">A</th><th class="text-end">B</th>
+                            <th class="text-end">Difference</th><th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (outcome.ControlTotals.Count == 0)
+                        {
+                            <tr><td colspan="5" class="rc-empty">No control totals are configured.</td></tr>
+                        }
+                        @foreach (var check in outcome.ControlTotals)
+                        {
+                            <tr>
+                                <td>
+                                    <div>@check.DisplayName</div>
+                                    <div class="rc-help rc-mono">@check.CheckCode</div>
+                                </td>
+                                <td class="rc-num">@(check.IsAmount ? Fmt.Money(check.ValueA) : Fmt.Count(check.ValueA))</td>
+                                <td class="rc-num">@(check.IsAmount ? Fmt.Money(check.ValueB) : Fmt.Count(check.ValueB))</td>
+                                <td class="rc-num @(check.Difference != 0 ? "rc-num-neg" : null)">
+                                    @(check.IsAmount ? Fmt.Money(check.Difference) : Fmt.Count(check.Difference))
+                                </td>
+                                <td>
+                                    @if (check.IsBalanced)
+                                    {
+                                        <span class="badge text-bg-success">Balanced</span>
+                                    }
+                                    else if (check.FailsRun)
+                                    {
+                                        <span class="badge text-bg-danger">Fails run</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge text-bg-warning">Off</span>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>

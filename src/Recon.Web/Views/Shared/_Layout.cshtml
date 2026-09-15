@@ -10,6 +10,9 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>@ViewData["Title"] · Reconciliation Platform</title>
+    @* Declared so the browser stops asking for /favicon.ico and logging a
+       404 against a page that is otherwise clean. *@
+    <link rel="icon" href="~/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="~/vendor/bootstrap.min.css">
     <link rel="stylesheet" href="~/vendor/bootstrap-icons.css">
     <link rel="stylesheet" href="~/css/recon.css">
@@ -82,6 +85,7 @@
 
 <script src="~/vendor/jquery.min.js"></script>
 <script src="~/vendor/bootstrap.bundle.min.js"></script>
+<script src="~/js/portal.js"></script>
 @await RenderSectionAsync("Scripts", required: false)
 </body>
 </html>

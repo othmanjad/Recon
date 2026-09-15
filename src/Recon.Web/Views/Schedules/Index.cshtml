@@ -1,0 +1,322 @@
+@using Recon.Web.Controllers
+@inject Microsoft.AspNetCore.Antiforgery.IAntiforgery Xsrf
+@{
+    var definitions = (List<DefinitionRow>)ViewData["Definitions"]!;
+    var schedules = (List<ScheduleRow>)ViewData["Schedules"]!;
+    var policies = (List<AlertPolicyRow>)ViewData["Policies"]!;
+    var canConfigure = ViewData["CanConfigure"] is true;
+    var schedulerEnabled = ViewData["SchedulerEnabled"] is true;
+    var serverNow = (DateTime)ViewData["ServerNow"]!;
+
+    var eventTypes = new[]
+    {
+        "FileNotReceived", "RunFailed", "ControlTotalMismatch", "ThresholdBreach",
+        "MatchDistributionDrift", "PartitionShortage", "ParseErrorLimit",
+    };
+}
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+    <h1 class="h4 mb-0">Schedules &amp; alerts</h1>
+    <span class="rc-help">server clock @serverNow.ToString("yyyy-MM-dd HH:mm") UTC</span>
+</div>
+
+@if (!schedulerEnabled)
+{
+    @*
+        An enabled schedule with the scheduler switched off is the failure
+        that looks like nothing at all.
+    *@
+    <div class="alert alert-danger" role="alert">
+        <strong>The in-process scheduler is disabled</strong>
+        (<code>Recon:Scheduler:Enabled = false</code>). Schedules below are stored and will not
+        fire.
+    </div>
+}
+
+<div class="alert alert-light border small">
+    A cron expression is evaluated in the <strong>schedule's</strong> time zone, not the server's:
+    a server in UTC firing "22:00" for a Jordan session fires at 01:00 local, which is the wrong
+    business date. Both times are shown. Running more than one node is safe — the second node's
+    attempt is refused by the run lock and recorded as <code>Rejected</code>, not duplicated.
+</div>
+
+<div class="rc-card mb-3">
+    <div class="rc-card-head">
+        <h2>Schedules</h2>
+        <span class="rc-help">@schedules.Count schedule(s)</span>
+    </div>
+    <div class="rc-table-scroll">
+        <table class="table rc-table align-middle">
+            <thead>
+                <tr>
+                    <th>Definition</th><th>Cron</th><th>Time zone</th>
+                    <th>Next (local)</th><th>Next (UTC)</th>
+                    <th>Expect file by</th><th>Status</th><th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @if (schedules.Count == 0)
+                {
+                    <tr><td colspan="8" class="rc-empty">No schedules. Runs happen only when triggered by hand.</td></tr>
+                }
+                @foreach (var schedule in schedules)
+                {
+                    <tr class="@(schedule.WillNeverFire ? "rc-warn-nonsargable" : null)">
+                        <td class="rc-mono">@schedule.DefinitionCode</td>
+                        <td class="rc-mono">
+                            @schedule.CronExpression
+                            @if (!schedule.CronValid)
+                            {
+                                <span class="badge text-bg-danger">invalid</span>
+                            }
+                        </td>
+                        <td class="rc-mono">
+                            @schedule.TimeZone
+                            @if (!schedule.TimeZoneKnown)
+                            {
+                                <span class="badge text-bg-danger" title="The scheduler would fall back to Asia/Amman">
+                                    unknown here
+                                </span>
+                            }
+                        </td>
+                        <td class="rc-mono">@(schedule.NextLocal?.ToString("yyyy-MM-dd HH:mm") ?? "—")</td>
+                        <td class="rc-mono">@(schedule.NextUtc?.ToString("yyyy-MM-dd HH:mm") ?? "—")</td>
+                        <td class="rc-mono">
+                            @if (schedule.ExpectedFileByTime is { } expected)
+                            {
+                                @expected.ToString("HH\\:mm")
+                            }
+                            else
+                            {
+                                @* Without it, a file that never arrived looks
+                                   identical to one not due yet. *@
+                                <span class="rc-help" title="FileNotReceived can never be raised without this">
+                                    not set
+                                </span>
+                            }
+                        </td>
+                        <td>
+                            @if (!schedule.IsEnabled)
+                            {
+                                <span class="badge text-bg-secondary">Disabled</span>
+                            }
+                            else if (!schedule.DefinitionActive)
+                            {
+                                <span class="badge text-bg-danger" title="The scheduler only fires schedules of active definitions">
+                                    definition inactive
+                                </span>
+                            }
+                            else if (!schedule.CronValid)
+                            {
+                                <span class="badge text-bg-danger">will be skipped</span>
+                            }
+                            else
+                            {
+                                <span class="badge text-bg-success">Enabled</span>
+                            }
+                        </td>
+                        <td class="text-end">
+                            @if (canConfigure)
+                            {
+                                <div class="d-flex gap-1 justify-content-end">
+                                    <button class="btn btn-sm btn-outline-secondary rc-schedule-edit" type="button"
+                                            data-id="@schedule.ScheduleId"
+                                            data-definition="@schedule.DefinitionId"
+                                            data-cron="@schedule.CronExpression"
+                                            data-zone="@schedule.TimeZone"
+                                            data-expected="@(schedule.ExpectedFileByTime?.ToString("HH\\:mm"))"
+                                            data-enabled="@schedule.IsEnabled.ToString().ToLowerInvariant()">
+                                        Edit
+                                    </button>
+                                    <form asp-action="DeleteSchedule" method="post" class="m-0">
+                                        <input type="hidden" name="scheduleId" value="@schedule.ScheduleId">
+                                        <button class="btn btn-sm btn-outline-danger" type="submit"
+                                                data-rc-confirm="Remove the schedule for @schedule.DefinitionCode?">
+                                            Remove
+                                        </button>
+                                    </form>
+                                </div>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    @if (canConfigure)
+    {
+        <div class="p-3 border-top">
+            <form asp-action="SaveSchedule" method="post" class="row g-2 align-items-end" id="rc-schedule-form">
+                <input type="hidden" name="scheduleId" id="scheduleId">
+                <div class="col-md-3">
+                    <label class="form-label" for="definitionId">Definition</label>
+                    <select class="form-select form-select-sm" id="definitionId" name="definitionId" required>
+                        @foreach (var definition in definitions)
+                        {
+                            <option value="@definition.DefinitionId">@definition.Code</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label" for="cronExpression">Cron</label>
+                    <input class="form-control form-control-sm rc-mono" id="cronExpression"
+                           name="cronExpression" value="0 22 * * *" required>
+                    <div class="form-text">minute hour day-of-month month day-of-week</div>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label" for="timeZone">Time zone</label>
+                    <input class="form-control form-control-sm" id="timeZone" name="timeZone"
+                           value="Asia/Amman" required>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label" for="expectedFileByTime">Expect file by</label>
+                    <input class="form-control form-control-sm" id="expectedFileByTime"
+                           name="expectedFileByTime" placeholder="HH:mm">
+                </div>
+                <div class="col-md-1 d-flex align-items-end">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="isEnabled" name="isEnabled"
+                               value="true" checked>
+                        <input type="hidden" name="isEnabled" value="false">
+                        <label class="form-check-label" for="isEnabled">On</label>
+                    </div>
+                </div>
+                <div class="col-md-2 d-flex gap-1">
+                    <button class="btn btn-sm btn-primary" type="submit">Save</button>
+                    <button class="btn btn-sm btn-outline-secondary" type="button" id="rc-cron-preview">
+                        Preview
+                    </button>
+                </div>
+                <div class="col-12" id="rc-cron-result"></div>
+            </form>
+        </div>
+    }
+</div>
+
+<div class="rc-card">
+    <div class="rc-card-head">
+        <h2>Alert policies</h2>
+        <span class="rc-help">only the Dashboard channel is implemented</span>
+    </div>
+    <div class="rc-table-scroll">
+        <table class="table rc-table align-middle">
+            <thead>
+                <tr>
+                    <th>Event</th><th>Scope</th><th class="text-end">Threshold</th>
+                    <th>Channel</th><th>Recipients</th><th>Status</th><th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @if (policies.Count == 0)
+                {
+                    <tr><td colspan="7" class="rc-empty">No policies. Nothing is announced.</td></tr>
+                }
+                @foreach (var policy in policies)
+                {
+                    <tr>
+                        <td>@policy.EventType</td>
+                        <td class="rc-mono">@(policy.DefinitionCode ?? "(platform-wide)")</td>
+                        <td class="rc-num">@(policy.ThresholdValue?.ToString("0.###") ?? "—")</td>
+                        <td>@policy.Channel</td>
+                        <td class="rc-help">@(policy.Recipients ?? "—")</td>
+                        <td>
+                            @if (policy.IsEnabled)
+                            {
+                                <span class="badge text-bg-success">Enabled</span>
+                            }
+                            else
+                            {
+                                <span class="badge text-bg-secondary">Disabled</span>
+                            }
+                        </td>
+                        <td class="text-end">
+                            @if (canConfigure)
+                            {
+                                <form asp-action="DeletePolicy" method="post" class="m-0">
+                                    <input type="hidden" name="alertPolicyId" value="@policy.AlertPolicyId">
+                                    <button class="btn btn-sm btn-outline-danger" type="submit"
+                                            data-rc-confirm="Remove the @policy.EventType policy?">Remove</button>
+                                </form>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+
+    @if (canConfigure)
+    {
+        <div class="p-3 border-top">
+            <form asp-action="SavePolicy" method="post" class="row g-2 align-items-end">
+                <div class="col-md-3">
+                    <label class="form-label" for="eventType">Event</label>
+                    <select class="form-select form-select-sm" id="eventType" name="eventType">
+                        @foreach (var type in eventTypes)
+                        {
+                            <option value="@type">@type</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label" for="policyDefinition">Scope</label>
+                    <select class="form-select form-select-sm" id="policyDefinition" name="definitionId">
+                        <option value="">Platform-wide</option>
+                        @foreach (var definition in definitions)
+                        {
+                            <option value="@definition.DefinitionId">@definition.Code</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label" for="thresholdValue">Threshold</label>
+                    <input class="form-control form-control-sm" type="number" step="0.001"
+                           id="thresholdValue" name="thresholdValue">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label" for="channel">Channel</label>
+                    <select class="form-select form-select-sm" id="channel" name="channel">
+                        <option value="Dashboard">Dashboard</option>
+                        <option value="Email">Email (not implemented)</option>
+                        <option value="Sms">Sms (not implemented)</option>
+                    </select>
+                </div>
+                <div class="col-md-1 d-flex align-items-end">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="policyEnabled" name="isEnabled"
+                               value="true" checked>
+                        <input type="hidden" name="isEnabled" value="false">
+                        <label class="form-check-label" for="policyEnabled">On</label>
+                    </div>
+                </div>
+                <div class="col-md-1">
+                    <button class="btn btn-sm btn-primary w-100" type="submit">Add</button>
+                </div>
+                <div class="col-12">
+                    <label class="form-label" for="recipients">Recipients</label>
+                    <input class="form-control form-control-sm" id="recipients" name="recipients"
+                           placeholder="for a channel that delivers to people">
+                    @*
+                        A policy on a channel nothing delivers is refused
+                        rather than stored: Operations would otherwise believe
+                        they are being told.
+                    *@
+                    <div class="form-text">
+                        Email and SMS are refused on save: a policy on a channel nothing delivers is
+                        worse than no policy, because it looks like coverage.
+                    </div>
+                </div>
+            </form>
+        </div>
+    }
+</div>
+
+@section Scripts {
+    <script>
+        window.ReconSchedules = {
+            previewUrl: "@Url.Action("Preview")",
+            token: "@Xsrf.GetAndStoreTokens(Context).RequestToken"
+        };
+    </script>
+    <script src="~/js/schedules.js"></script>
+}

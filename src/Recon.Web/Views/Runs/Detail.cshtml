@@ -1,0 +1,337 @@
+@model RunDetailModel
+@{
+    var run = Model.Run;
+    var distribution = Model.Distribution();
+    var lastShare = distribution.Count > 0 ? distribution[^1].Share : 0;
+}
+<div class="rc-crumb mb-2">
+    <a asp-controller="Runs" asp-action="Index">Runs</a> / run @run.RunId
+</div>
+
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+    <h1 class="h4 mb-0">
+        Run @run.RunId
+        <span class="ms-2">@Fmt.StatusBadge(run.Status)</span>
+        <span class="ms-1">@Fmt.RunTypeBadge(run.RunType)</span>
+        @if (!run.IsCurrent)
+        {
+            <span class="badge text-bg-light border ms-1">superseded</span>
+        }
+    </h1>
+    <div class="d-flex gap-2">
+        <a class="btn btn-sm btn-outline-secondary"
+           asp-controller="Exceptions" asp-action="Index" asp-route-definitionId="@run.DefinitionId">
+            Exceptions
+        </a>
+        <a class="btn btn-sm btn-outline-secondary"
+           asp-controller="Reports" asp-action="Index"
+           asp-route-id="@run.DefinitionId" asp-route-runId="@run.RunId">
+            Reports
+        </a>
+    </div>
+</div>
+
+@if (run.ErrorMessage is { Length: > 0 } error)
+{
+    <div class="alert alert-danger" role="alert">
+        <strong>The run failed:</strong> @error
+        <div class="small mt-1">
+            Steps are checkpointed, so a resume starts from the failed step rather than re-staging
+            the day.
+        </div>
+    </div>
+}
+
+<div class="row g-3 mb-3">
+    <div class="col-md-6 col-xl-3">
+        <div class="rc-tile">
+            <div class="rc-tile-label">Definition</div>
+            <div class="rc-tile-value" style="font-size:16px">@run.DefinitionCode</div>
+            <div class="rc-tile-sub">@run.DefinitionName</div>
+        </div>
+    </div>
+    <div class="col-md-6 col-xl-3">
+        <div class="rc-tile">
+            <div class="rc-tile-label">Business date</div>
+            <div class="rc-tile-value" style="font-size:16px">@run.BusinessDate.ToString("yyyy-MM-dd")</div>
+            <div class="rc-tile-sub">session @(run.SessionRef ?? "—") · @run.TriggeredBy</div>
+        </div>
+    </div>
+    <div class="col-md-6 col-xl-3">
+        <div class="rc-tile">
+            <div class="rc-tile-label">Rows</div>
+            <div class="rc-tile-value" style="font-size:16px">
+                @Fmt.Count(run.LeftRowCount) ↔ @Fmt.Count(run.RightRowCount)
+            </div>
+            <div class="rc-tile-sub">
+                @Fmt.Count(run.MatchedCount) matched ·
+                @Fmt.Count(run.UnmatchedCount) unmatched ·
+                @Fmt.Count(run.AmbiguousCount) ambiguous
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6 col-xl-3">
+        <div class="rc-tile">
+            <div class="rc-tile-label">Staging read</div>
+            <div class="rc-tile-value" style="font-size:16px">run @run.StagingRunId</div>
+            <div class="rc-tile-sub">
+                @if (run.SourceRunId is null)
+                {
+                    <text>its own staged rows</text>
+                }
+                else
+                {
+                    <text>reused from run @run.SourceRunId — not re-staged</text>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3">
+    <div class="col-xl-7">
+        <div class="rc-card mb-3">
+            <div class="rc-card-head">
+                <h2>Stages</h2>
+                <span class="rc-help">each is a checkpoint a resume can start from</span>
+            </div>
+            <div class="rc-table-scroll">
+                <table class="table rc-table align-middle">
+                    <thead>
+                        <tr>
+                            <th>Step</th><th>Side</th><th>Pass</th><th>Status</th>
+                            <th class="text-end">Rows in</th>
+                            <th class="text-end">Matched</th>
+                            <th class="text-end">Seconds</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (Model.Steps.Count == 0)
+                        {
+                            <tr><td colspan="8" class="rc-empty">This run recorded no steps.</td></tr>
+                        }
+                        @foreach (var step in Model.Steps)
+                        {
+                            <tr>
+                                <td>@step.StepName</td>
+                                @* Side is part of a step's identity: without it
+                                   the right dataset's exclusions, duplicate
+                                   detection and classification were skipped as
+                                   "already done". *@
+                                <td class="rc-help">@(step.Side ?? "—")</td>
+                                <td class="rc-mono">
+                                    @if (step.RuleSequence is { } sequence)
+                                    {
+                                        <text>@sequence · @step.RuleCode</text>
+                                    }
+                                    else
+                                    {
+                                        <text>—</text>
+                                    }
+                                </td>
+                                <td>
+                                    @Fmt.StatusBadge(step.Status)
+                                    @if (step.ErrorMessage is { Length: > 0 } stepError)
+                                    {
+                                        <i class="bi bi-info-circle text-danger" title="@stepError"
+                                           aria-label="@stepError"></i>
+                                    }
+                                </td>
+                                <td class="rc-num">@Fmt.Count(step.RowsProcessed)</td>
+                                <td class="rc-num">@Fmt.Count(step.RowsMatched)</td>
+                                <td class="rc-num">@Fmt.Seconds(step.Seconds)</td>
+                                <td class="text-end">
+                                    <a class="btn btn-sm btn-outline-secondary" target="_blank"
+                                       asp-action="StepSql" asp-route-id="@run.RunId"
+                                       asp-route-stepId="@step.RunStepId">SQL</a>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="rc-card mb-3">
+            <div class="rc-card-head">
+                <h2>Match distribution</h2>
+                <span class="rc-help">the data-quality early warning, not a progress bar</span>
+            </div>
+            <div class="p-3">
+                @if (distribution.Count == 0)
+                {
+                    <div class="rc-help">This run ran no match passes.</div>
+                }
+                else
+                {
+                    <p class="rc-help mb-3">
+                        How matches spread across the ordered passes. Pass 1 is the clean reference
+                        match; a rising share in the <em>last</em> pass means that match is degrading
+                        upstream, which is what <code>MatchDistributionDrift</code> alerts on.
+                    </p>
+
+                    @foreach (var (sequence, code, matched, share) in distribution)
+                    {
+                        var isLast = sequence == distribution[^1].Sequence && distribution.Count > 1;
+                        <div class="mb-3">
+                            <div class="d-flex justify-content-between small">
+                                <span><span class="rc-seq me-2">@sequence</span>@code</span>
+                                <span class="rc-num">
+                                    @Fmt.Count(matched) · @share.ToString("N1")%
+                                </span>
+                            </div>
+                            <div class="rc-pass-bar mt-1 @(isLast ? "rc-pass-late" : null)">
+                                <span style="width:@share.ToString("N1")%"></span>
+                            </div>
+                        </div>
+                    }
+
+                    @if (distribution.Count > 1 && lastShare >= 15)
+                    {
+                        <div class="alert alert-warning mb-0 small" role="alert">
+                            <strong>@lastShare.ToString("N1")% of matches fell to the last pass.</strong>
+                            Above the configured drift threshold: the earlier, cleaner passes are
+                            matching less than they did.
+                        </div>
+                    }
+                }
+            </div>
+        </div>
+    </div>
+
+    <div class="col-xl-5">
+        <div class="rc-card mb-3">
+            <div class="rc-card-head">
+                <h2>Control totals</h2>
+                <span class="rc-help">a fully matched run that does not balance is a failed run</span>
+            </div>
+            <div class="rc-table-scroll">
+                <table class="table rc-table align-middle">
+                    <thead>
+                        <tr>
+                            <th>Check</th>
+                            <th class="text-end">A</th>
+                            <th class="text-end">B</th>
+                            <th class="text-end">Difference</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (Model.ControlTotals.Count == 0)
+                        {
+                            <tr><td colspan="5" class="rc-empty">No control totals are configured.</td></tr>
+                        }
+                        @foreach (var total in Model.ControlTotals)
+                        {
+                            @* IsAmount comes from the aggregate function: a
+                               count formatted as money turns 15 rows into
+                               0.015. *@
+                            <tr>
+                                <td>
+                                    <div>@total.DisplayName</div>
+                                    <div class="rc-help rc-mono">@total.CheckCode</div>
+                                </td>
+                                <td class="rc-num">
+                                    @(total.IsAmount ? Fmt.Money(total.ValueA) : Fmt.Count(total.ValueA))
+                                </td>
+                                <td class="rc-num">
+                                    @(total.IsAmount ? Fmt.Money(total.ValueB) : Fmt.Count(total.ValueB))
+                                </td>
+                                <td class="rc-num @(total.Difference != 0 ? "rc-num-neg" : null)">
+                                    @(total.IsAmount ? Fmt.Money(total.Difference) : Fmt.Count(total.Difference))
+                                </td>
+                                <td>
+                                    @if (total.IsBalanced)
+                                    {
+                                        <span class="badge text-bg-success">Balanced</span>
+                                    }
+                                    else if (total.FailsRun)
+                                    {
+                                        <span class="badge text-bg-danger">Fails run</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge text-bg-warning">Off</span>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="rc-card mb-3">
+            <div class="rc-card-head">
+                <h2>Durable aggregates</h2>
+                <span class="rc-help">what keeps a 7-year-old number a primary-key read</span>
+            </div>
+            <div class="rc-table-scroll" style="max-height:340px">
+                <table class="table rc-table align-middle">
+                    <thead>
+                        <tr>
+                            <th>Dataset</th><th>Side</th><th>Group</th><th>Status</th>
+                            <th class="text-end">Rows</th><th class="text-end">Amount</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (Model.Aggregates.Count == 0)
+                        {
+                            <tr><td colspan="6" class="rc-empty">No aggregates were written.</td></tr>
+                        }
+                        @foreach (var aggregate in Model.Aggregates)
+                        {
+                            <tr>
+                                <td class="rc-mono">@aggregate.DatasetCode</td>
+                                <td class="rc-help">@aggregate.Side</td>
+                                <td class="rc-mono">@aggregate.GroupKey</td>
+                                <td>@Fmt.StatusBadge(aggregate.MatchStatus)</td>
+                                <td class="rc-num">@Fmt.Count(aggregate.RowCount)</td>
+                                <td class="rc-num">
+                                    @Fmt.Money(aggregate.AmountMinorSum, aggregate.CurrencyCode)
+                                    <span class="rc-help">@aggregate.CurrencyCode</span>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        @if (Model.ParseErrors.Count > 0)
+        {
+            <div class="rc-card">
+                <div class="rc-card-head">
+                    <h2>Parse errors</h2>
+                    <span class="rc-help">rows the file offered and the parser refused</span>
+                </div>
+                <div class="rc-table-scroll" style="max-height:320px">
+                    <table class="table rc-table align-middle">
+                        <thead>
+                            <tr><th>Row</th><th>Type</th><th>Field</th><th>Message</th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var parseError in Model.ParseErrors)
+                            {
+                                <tr>
+                                    <td class="rc-mono">@(parseError.RawRowNumber?.ToString() ?? "—")</td>
+                                    <td>@parseError.ErrorType</td>
+                                    <td class="rc-mono">@(parseError.FieldCode ?? "—")</td>
+                                    <td>
+                                        <div>@parseError.Message</div>
+                                        @if (parseError.RawLine is { Length: > 0 } raw)
+                                        {
+                                            <div class="rc-mono rc-help text-truncate" style="max-width:340px"
+                                                 title="@raw">@raw</div>
+                                        }
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        }
+    </div>
+</div>

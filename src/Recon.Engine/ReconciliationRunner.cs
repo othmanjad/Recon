@@ -58,9 +58,24 @@ public sealed class ReconciliationRunner(
         try
         {
             // ---- before pass 1 -------------------------------------------
+            // A run reading another run's staged rows (StagingRunId differs
+            // from its own id — a Rematch or a Sandbox replay) must re-open
+            // them first. They still carry the source run's verdict, and
+            // everything below filters on MatchStatus = 'Unmatched'.
+            var reusesRows = run.StagingRunId != run.RunId;
+
             foreach (var side in new[] { Side.Left, Side.Right })
             {
                 var dataset = definition.DatasetFor(side);
+
+                if (reusesRows)
+                {
+                    await RunStepAsync(
+                        run.RunId, RunStepName.Reset, null, side,
+                        () => SqlQueryBuilderLifecycle.CompileWorkingSetReset(
+                            dataset, run.RunId, run.StagingRunId, windowFrom, windowTo),
+                        cancellationToken).ConfigureAwait(false);
+                }
 
                 await RunStepAsync(
                     run.RunId, RunStepName.Exclude, null, side,

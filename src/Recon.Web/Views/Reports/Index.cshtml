@@ -1,0 +1,401 @@
+@using Recon.Domain.Configuration
+@using Recon.Engine.Reporting
+@{
+    var definitions = (List<DefinitionRow>)ViewData["Definitions"]!;
+    var selectedId = ViewData["Selected"] as int?;
+    var definition = ViewData["Definition"] as ReconciliationDefinition;
+    var reports = (List<ReportDefinition>)ViewData["Reports"]!;
+    var runs = (List<RunRow>)ViewData["Runs"]!;
+    var runId = ViewData["RunId"] as long?;
+    var canConfigure = ViewData["CanConfigure"] is true;
+    var hasAnyAccess = ViewData["HasAnyAccess"] is true;
+    var chosenRun = runId ?? runs.FirstOrDefault()?.RunId;
+}
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+    <h1 class="h4 mb-0">Reports</h1>
+    <form method="get" asp-action="Index" class="d-flex gap-2 rc-picker">
+        <select class="form-select form-select-sm" name="id" style="width:auto" aria-label="Definition">
+            @foreach (var row in definitions)
+            {
+                <option value="@row.DefinitionId" selected="@(selectedId == row.DefinitionId)">
+                    @row.Code
+                </option>
+            }
+        </select>
+        <button class="btn btn-sm btn-primary" type="submit">Open</button>
+    </form>
+</div>
+
+@if (!hasAnyAccess)
+{
+    <div class="alert alert-info">You have no counterparty grants, so there is nothing to report on.</div>
+}
+else if (definition is null)
+{
+    <div class="rc-card"><div class="rc-empty">No definition is visible to you.</div></div>
+}
+else
+{
+    @*
+        A worksheet holds 1,048,576 rows; a 2M-row day does not fit (review
+        item E1). The writer splits sheets rather than truncating, and CSV
+        streams as one file.
+    *@
+    <div class="alert alert-light border small">
+        Columns are chosen from the field registry, never typed — the same property that keeps the
+        rule builder away from SQL. A transaction-level report of a 2M-row day exceeds a single
+        worksheet, so Excel output is split across sheets automatically and CSV streams as one
+        file. Every export is written to the audit log before a byte is sent.
+    </div>
+
+    <div class="rc-card mb-3">
+        <div class="rc-card-head">
+            <h2>Export</h2>
+            <span class="rc-help">nothing is buffered — reader, writer and response are one pipeline</span>
+        </div>
+        <div class="p-3">
+            @if (runs.Count == 0)
+            {
+                <div class="rc-help">
+                    No completed run of @definition.Code yet. A report reads a run's staged rows and
+                    results, so there is nothing to export until one has run.
+                </div>
+            }
+            else if (reports.Count == 0)
+            {
+                <div class="rc-help">No report is defined for @definition.Code yet.</div>
+            }
+            else
+            {
+                <form method="get" asp-action="Index" class="row g-2 align-items-end mb-3">
+                    <input type="hidden" name="id" value="@definition.DefinitionId">
+                    <div class="col-md-4">
+                        <label class="form-label" for="runId">Run</label>
+                        <select class="form-select form-select-sm" id="runId" name="runId">
+                            @foreach (var run in runs)
+                            {
+                                <option value="@run.RunId" selected="@(chosenRun == run.RunId)">
+                                    run @run.RunId · @run.BusinessDate.ToString("yyyy-MM-dd")
+                                    · @run.Status · @Fmt.Count(run.MatchedCount) matched
+                                </option>
+                            }
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <button class="btn btn-sm btn-outline-secondary" type="submit">Choose run</button>
+                    </div>
+                </form>
+
+                <div class="rc-table-scroll">
+                    <table class="table rc-table align-middle">
+                        <thead>
+                            <tr>
+                                <th>Code</th><th>Name</th><th>Scope</th><th>Format</th>
+                                <th class="text-end">Columns</th><th>Status</th><th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var report in reports)
+                            {
+                                <tr>
+                                    <td class="rc-mono">@report.Code</td>
+                                    <td>
+                                        <div>@report.Name</div>
+                                        <div class="rc-help">sheet “@report.SheetName”</div>
+                                    </td>
+                                    <td>
+                                        <span class="badge text-bg-light border">@report.Scope</span>
+                                        @if (report.IsTransactionLevel)
+                                        {
+                                            <span class="rc-help d-block">transaction level</span>
+                                        }
+                                    </td>
+                                    <td>
+                                        @report.OutputFormat
+                                        @if (report.IsTransactionLevel
+                                             && report.OutputFormat == ReportOutputFormat.Xlsx)
+                                        {
+                                            <i class="bi bi-exclamation-triangle text-warning"
+                                               title="A 2M-row day will be split across sheets; CSV would stream as one file"
+                                               aria-label="will be split across sheets"></i>
+                                        }
+                                    </td>
+                                    <td class="rc-num">@report.Columns.Count</td>
+                                    <td>
+                                        @if (report.IsActive)
+                                        {
+                                            <span class="badge text-bg-success">Active</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="badge text-bg-secondary">Inactive</span>
+                                        }
+                                    </td>
+                                    <td class="text-end">
+                                        <div class="d-flex gap-1 justify-content-end">
+                                            @if (chosenRun is { } exportRun && report.Columns.Count > 0)
+                                            {
+                                                <a class="btn btn-sm btn-primary" asp-action="Download"
+                                                   asp-route-id="@report.ReportDefinitionId"
+                                                   asp-route-runId="@exportRun">Download</a>
+                                            }
+                                            else
+                                            {
+                                                <span class="rc-help align-self-center">
+                                                    @(report.Columns.Count == 0 ? "no columns" : "no run")
+                                                </span>
+                                            }
+                                            @if (canConfigure)
+                                            {
+                                                <button class="btn btn-sm btn-outline-secondary rc-report-edit"
+                                                        type="button"
+                                                        data-id="@report.ReportDefinitionId"
+                                                        data-code="@report.Code"
+                                                        data-name="@report.Name"
+                                                        data-sheet="@report.SheetName"
+                                                        data-scope="@report.Scope"
+                                                        data-format="@report.OutputFormat"
+                                                        data-subtotals="@report.IncludeSubtotals.ToString().ToLowerInvariant()"
+                                                        data-active="@report.IsActive.ToString().ToLowerInvariant()">
+                                                    Edit
+                                                </button>
+                                                <form asp-action="DeleteReport" method="post" class="m-0">
+                                                    <input type="hidden" name="definitionId" value="@definition.DefinitionId">
+                                                    <input type="hidden" name="reportDefinitionId" value="@report.ReportDefinitionId">
+                                                    <button class="btn btn-sm btn-outline-danger" type="submit"
+                                                            data-rc-confirm="Remove the report @report.Code and its columns?">
+                                                        Remove
+                                                    </button>
+                                                </form>
+                                            }
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </div>
+    </div>
+
+    @foreach (var report in reports)
+    {
+        <div class="rc-card mb-3">
+            <div class="rc-card-head">
+                <h2>@report.Code — columns</h2>
+                <span class="rc-help">@report.Columns.Count column(s), in sequence</span>
+            </div>
+            <div class="rc-table-scroll">
+                <table class="table rc-table align-middle">
+                    <thead>
+                        <tr>
+                            <th class="text-end">#</th><th>Header</th><th>Source</th>
+                            <th>Role</th><th>Format</th><th class="text-end">Width</th><th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (report.Columns.Count == 0)
+                        {
+                            <tr>
+                                <td colspan="7" class="rc-empty">
+                                    No columns. A report with none would compile to a query selecting
+                                    nothing.
+                                </td>
+                            </tr>
+                        }
+                        @foreach (var column in report.Columns)
+                        {
+                            <tr>
+                                <td class="rc-num">@column.Sequence</td>
+                                <td>@column.Header</td>
+                                <td>
+                                    @if (column.Field is { } field)
+                                    {
+                                        <code class="rc-field">@field.FieldCode</code>
+                                        <span class="rc-help">@field.StorageSlot</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge text-bg-light border">@column.ComputedField</span>
+                                    }
+                                </td>
+                                <td>@Fmt.RoleBadge(column.Field?.Role?.ToString())</td>
+                                <td class="rc-mono">@(column.DisplayFormat ?? "—")</td>
+                                <td class="rc-num">@(column.ColumnWidth?.ToString() ?? "—")</td>
+                                <td class="text-end">
+                                    @if (canConfigure)
+                                    {
+                                        <form asp-action="DeleteColumn" method="post" class="m-0">
+                                            <input type="hidden" name="definitionId" value="@definition.DefinitionId">
+                                            <input type="hidden" name="reportColumnId" value="@column.ReportColumnId">
+                                            <button class="btn btn-sm btn-outline-danger" type="submit">Remove</button>
+                                        </form>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            @if (canConfigure)
+            {
+                <div class="p-3 border-top">
+                    <form asp-action="SaveColumn" method="post" class="row g-2 align-items-end">
+                        <input type="hidden" name="definitionId" value="@definition.DefinitionId">
+                        <input type="hidden" name="reportDefinitionId" value="@report.ReportDefinitionId">
+                        <div class="col-md-2">
+                            <label class="form-label">Side</label>
+                            <select class="form-select form-select-sm" name="side">
+                                <option value="Left">@definition.Left.Code</option>
+                                <option value="Right">@definition.Right.Code</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label">Registry field</label>
+                            <select class="form-select form-select-sm" name="fieldCode">
+                                <option value="">(use a computed column)</option>
+                                <optgroup label="@definition.Left.Code">
+                                    @foreach (var field in definition.Left.Fields.OrderBy(f => f.DisplayOrder))
+                                    {
+                                        <option value="@field.FieldCode">@field.DisplayLabel (@field.FieldCode)</option>
+                                    }
+                                </optgroup>
+                                <optgroup label="@definition.Right.Code">
+                                    @foreach (var field in definition.Right.Fields.OrderBy(f => f.DisplayOrder))
+                                    {
+                                        <option value="@field.FieldCode">@field.DisplayLabel (@field.FieldCode)</option>
+                                    }
+                                </optgroup>
+                            </select>
+                            @*
+                                requireMatchable is false for a report: a
+                                report may show a field the rule builder
+                                withholds. Currency is the obvious case — not a
+                                matching key, but every money column needs it.
+                            *@
+                            <div class="form-text">
+                                A report may show a field the rule builder withholds — currency is
+                                the obvious case.
+                            </div>
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label">Computed column</label>
+                            <select class="form-select form-select-sm" name="computedField">
+                                <option value="">(none)</option>
+                                @foreach (var computed in ReportSqlBuilder.ComputedColumns.OrderBy(c => c, StringComparer.Ordinal))
+                                {
+                                    <option value="@computed">@computed</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label">Header</label>
+                            <input class="form-control form-control-sm" name="header" required>
+                        </div>
+                        <div class="col-md-1">
+                            <label class="form-label">Seq</label>
+                            <input class="form-control form-control-sm" type="number" name="sequence"
+                                   value="@(report.Columns.Count == 0 ? 1 : report.Columns.Max(c => c.Sequence) + 1)"
+                                   required>
+                        </div>
+                        <div class="col-md-1">
+                            <label class="form-label">Width</label>
+                            <input class="form-control form-control-sm" type="number" name="columnWidth">
+                        </div>
+                        <div class="col-md-1">
+                            <button class="btn btn-sm btn-primary w-100" type="submit">Add</button>
+                        </div>
+                        <div class="col-12">
+                            <label class="form-label" for="displayFormat-@report.ReportDefinitionId">
+                                Display format
+                            </label>
+                            <input class="form-control form-control-sm rc-mono"
+                                   id="displayFormat-@report.ReportDefinitionId" name="displayFormat"
+                                   placeholder="e.g. #,##0.000 for a JOD amount">
+                        </div>
+                    </form>
+                </div>
+            }
+        </div>
+    }
+
+    @if (canConfigure)
+    {
+        <div class="rc-card">
+            <div class="rc-card-head">
+                <h2 id="rc-report-form-title">Add a report</h2>
+                <button class="btn btn-sm btn-outline-secondary" type="button" id="rc-report-reset">New</button>
+            </div>
+            <div class="p-3">
+                <form asp-action="SaveReport" method="post" class="row g-3" id="rc-report-form">
+                    <input type="hidden" name="definitionId" value="@definition.DefinitionId">
+                    <input type="hidden" name="reportDefinitionId" id="reportDefinitionId">
+                    <div class="col-md-2">
+                        <label class="form-label" for="reportCode">Code</label>
+                        <input class="form-control" id="reportCode" name="code" required>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" for="reportName">Name</label>
+                        <input class="form-control" id="reportName" name="name" required>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" for="sheetName">Sheet name</label>
+                        <input class="form-control" id="sheetName" name="sheetName">
+                        <div class="form-text">Defaults to the code.</div>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" for="dataScope">Scope</label>
+                        <select class="form-select" id="dataScope" name="dataScope">
+                            @foreach (var scope in Enum.GetNames<ReportScope>())
+                            {
+                                <option value="@scope">@scope</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" for="outputFormat">Format</label>
+                        <select class="form-select" id="outputFormat" name="outputFormat">
+                            <option value="Xlsx">Xlsx</option>
+                            <option value="Csv">Csv</option>
+                        </select>
+                    </div>
+                    <div class="col-md-1 d-flex align-items-end">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="reportActive"
+                                   name="isActive" value="true" checked>
+                            <input type="hidden" name="isActive" value="false">
+                            <label class="form-check-label" for="reportActive">Active</label>
+                        </div>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label" for="filterJson">Filter (condition tree JSON)</label>
+                        <textarea class="form-control rc-mono" id="filterJson" name="filterJson"
+                                  rows="4" spellcheck="false"
+                                  placeholder='{"op":"and","items":[{"field":"STATUS","cmp":"eq","value":"ACSC"}]}'></textarea>
+                        <div class="form-text">
+                            Validated against @definition.Left.Code's registry on save — an unknown
+                            field is refused rather than compiled.
+                        </div>
+                    </div>
+                    <div class="col-12">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="includeSubtotals"
+                                   name="includeSubtotals" value="true">
+                            <input type="hidden" name="includeSubtotals" value="false">
+                            <label class="form-check-label" for="includeSubtotals">Include subtotals</label>
+                        </div>
+                    </div>
+                    <div class="col-12">
+                        <button class="btn btn-primary" type="submit">Save report</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    }
+}
+
+@section Scripts {
+    <script src="~/js/reports.js"></script>
+}

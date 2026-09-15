@@ -1,0 +1,396 @@
+@using Recon.Domain.Configuration
+@using Recon.Web.Controllers
+@{
+    var datasets = (List<DatasetRow>)ViewData["Datasets"]!;
+    var selected = ViewData["Selected"] as Dataset;
+    var slots = (List<SlotOption>)ViewData["Slots"]!;
+    var problems = (IReadOnlyList<string>)ViewData["Problems"]!;
+    var selectedRow = selected is null
+        ? null
+        : datasets.FirstOrDefault(d => d.DatasetId == selected.DatasetId);
+
+    var usedSlots = selected?.Fields.Select(f => f.StorageSlot).ToHashSet(StringComparer.Ordinal)
+        ?? new HashSet<string>(StringComparer.Ordinal);
+
+    var usedCompanions = selected?.Fields
+        .Where(f => f.NormalizedSlot is not null)
+        .Select(f => f.NormalizedSlot!)
+        .ToHashSet(StringComparer.Ordinal) ?? new HashSet<string>(StringComparer.Ordinal);
+}
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+    <h1 class="h4 mb-0">Datasets &amp; fields</h1>
+    <form method="get" asp-action="Index" class="d-flex gap-2 rc-picker">
+        <select class="form-select form-select-sm" name="id" style="width:auto" aria-label="Dataset">
+            @foreach (var dataset in datasets)
+            {
+                <option value="@dataset.DatasetId" selected="@(selected?.DatasetId == dataset.DatasetId)">
+                    @dataset.CounterpartyCode / @dataset.Code
+                </option>
+            }
+        </select>
+        <button class="btn btn-sm btn-primary" type="submit">Open</button>
+    </form>
+</div>
+
+@*
+    The registry is the only path to the data. Nothing outside the provider
+    and compiler layers references a storage slot, which is what preserves
+    the option to change the storage model later (§7).
+*@
+<div class="alert alert-light border d-flex gap-2 align-items-start">
+    <i class="bi bi-shield-check fs-5 text-primary" aria-hidden="true"></i>
+    <div class="small">
+        <strong>This table is the field registry.</strong> Every rule, classification, exclusion,
+        report column and control total resolves field names against it and never from free text —
+        that is what keeps a user-driven rule builder away from SQL. A field not marked
+        <em>matchable</em> can be displayed and exported but can never appear in a condition.
+    </div>
+</div>
+
+@if (datasets.Count == 0)
+{
+    <div class="rc-card"><div class="rc-empty">No datasets are visible to you.</div></div>
+}
+else if (selected is null)
+{
+    <div class="rc-card"><div class="rc-empty">Choose a dataset.</div></div>
+}
+else
+{
+    <div class="row g-3 mb-3">
+        <div class="col-lg-8">
+            <div class="rc-card h-100">
+                <div class="rc-card-head">
+                    <h2>@selected.Code — @selected.Name</h2>
+                    <div class="d-flex gap-2 align-items-center">
+                        @if (selected.IsActive)
+                        {
+                            <span class="badge text-bg-success">Active</span>
+                        }
+                        else
+                        {
+                            <span class="badge text-bg-secondary">Inactive</span>
+                        }
+                        <form asp-action="Activate" method="post" class="m-0">
+                            <input type="hidden" name="id" value="@selected.DatasetId">
+                            <input type="hidden" name="active" value="@(!selected.IsActive)">
+                            <button class="btn btn-sm @(selected.IsActive ? "btn-outline-secondary" : "btn-outline-primary")"
+                                    type="submit">
+                                @(selected.IsActive ? "Deactivate" : "Activate")
+                            </button>
+                        </form>
+                    </div>
+                </div>
+                <div class="p-3">
+                    <dl class="row mb-0 small">
+                        <dt class="col-sm-3">Provider</dt>
+                        <dd class="col-sm-3">@selected.Provider</dd>
+                        <dt class="col-sm-3">Time zone</dt>
+                        <dd class="col-sm-3">@selected.TimeZone</dd>
+
+                        <dt class="col-sm-3">Default currency</dt>
+                        <dd class="col-sm-3">@(selected.DefaultCurrency ?? "—")</dd>
+                        <dt class="col-sm-3">Fields</dt>
+                        <dd class="col-sm-3">
+                            @selected.Fields.Count
+                            (@selected.Fields.Count(f => f.IsMatchable) matchable,
+                            @selected.Fields.Count(f => f.IsIndexed) indexed)
+                        </dd>
+
+                        <dt class="col-sm-3">Duplicate key</dt>
+                        <dd class="col-sm-9">
+                            @if (string.IsNullOrWhiteSpace(selected.DuplicateKeyFields))
+                            {
+                                <span class="text-danger">not declared</span>
+                                <span class="rc-help">
+                                    — a file containing the same reference twice would match one row
+                                    and orphan the other, with no signal that the source was the
+                                    problem (finding C3).
+                                </span>
+                            }
+                            else
+                            {
+                                <code class="rc-field">@selected.DuplicateKeyFields</code>
+                            }
+                        </dd>
+                    </dl>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-4">
+            <div class="rc-card h-100">
+                <div class="rc-card-head"><h2>Activation</h2></div>
+                <div class="p-3">
+                    @if (problems.Count == 0)
+                    {
+                        <div class="d-flex gap-2 align-items-start">
+                            <i class="bi bi-check-circle text-success fs-5" aria-hidden="true"></i>
+                            <div class="small">
+                                Every universal role is mapped and the slot pools are respected.
+                                This dataset can be activated.
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        @* The gate of review item B6: the rule existed in prose
+                           and had no enforcement point. *@
+                        <ul class="mb-0 small text-danger">
+                            @foreach (var problem in problems)
+                            {
+                                <li class="mb-1">@problem</li>
+                            }
+                        </ul>
+                    }
+
+                    <hr>
+                    <div class="rc-tile-label mb-2">Universal roles</div>
+                    <div class="d-flex flex-wrap gap-1">
+                        @foreach (var role in ReconciliationDefinition.RequiredRoles)
+                        {
+                            var field = selected.FieldWithRole(role);
+                            <span class="badge @(field is null ? "text-bg-danger" : "text-bg-success")"
+                                  title="@(field is null ? "not mapped" : field.FieldCode)">
+                                @role
+                            </span>
+                        }
+                    </div>
+                    <div class="rc-help mt-2">
+                        The engine never looks for a field <em>named</em> "Amount"; it looks for the
+                        field whose role <em>is</em> Amount. That is what makes control totals, fee
+                        calculation and date partitioning work across partners that name nothing
+                        alike.
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="rc-card mb-3">
+        <div class="rc-card-head">
+            <h2>Field registry</h2>
+            <span class="rc-help">@selected.Fields.Count field(s)</span>
+        </div>
+        <div class="rc-table-scroll">
+            <table class="table rc-table table-hover align-middle">
+                <thead>
+                    <tr>
+                        <th class="text-end">#</th>
+                        <th>Code</th><th>Label</th><th>Type</th><th>Role</th><th>Slot</th>
+                        <th>Matchable</th><th>Indexed</th><th>Required</th>
+                        <th>Normalized companion</th><th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (selected.Fields.Count == 0)
+                    {
+                        <tr><td colspan="11" class="rc-empty">This dataset has no fields yet.</td></tr>
+                    }
+                    @foreach (var field in selected.Fields.OrderBy(f => f.DisplayOrder))
+                    {
+                        <tr>
+                            <td class="rc-num">@field.DisplayOrder</td>
+                            <td><code class="rc-field">@field.FieldCode</code></td>
+                            <td>@field.DisplayLabel</td>
+                            <td class="rc-help">@field.DataType</td>
+                            <td>@Fmt.RoleBadge(field.Role?.ToString())</td>
+                            <td class="rc-mono">@field.StorageSlot</td>
+                            <td>
+                                @if (field.IsMatchable)
+                                {
+                                    <i class="bi bi-check-lg text-success" aria-label="matchable"></i>
+                                }
+                                else
+                                {
+                                    <i class="bi bi-dash text-muted" aria-label="not matchable"></i>
+                                }
+                            </td>
+                            <td>
+                                @if (field.IsIndexed)
+                                {
+                                    <i class="bi bi-check-lg text-success" aria-label="indexed"></i>
+                                }
+                                else
+                                {
+                                    <i class="bi bi-dash text-muted" aria-label="not indexed"></i>
+                                }
+                            </td>
+                            <td>
+                                @if (field.IsRequired)
+                                {
+                                    <i class="bi bi-check-lg text-success" aria-label="required"></i>
+                                }
+                                else
+                                {
+                                    <i class="bi bi-dash text-muted" aria-label="optional"></i>
+                                }
+                            </td>
+                            <td class="rc-mono">
+                                @if (field.NormalizeForMatch)
+                                {
+                                    <text>@field.NormalizedSlot</text>
+                                }
+                                else
+                                {
+                                    <span class="rc-help">—</span>
+                                }
+                            </td>
+                            <td class="text-end">
+                                <button class="btn btn-sm btn-outline-secondary rc-field-edit" type="button"
+                                        data-id="@field.DatasetFieldId"
+                                        data-code="@field.FieldCode"
+                                        data-label="@field.DisplayLabel"
+                                        data-type="@field.DataType"
+                                        data-role="@(field.Role?.ToString())"
+                                        data-slot="@field.StorageSlot"
+                                        data-matchable="@field.IsMatchable.ToString().ToLowerInvariant()"
+                                        data-indexed="@field.IsIndexed.ToString().ToLowerInvariant()"
+                                        data-required="@field.IsRequired.ToString().ToLowerInvariant()"
+                                        data-normalize="@field.NormalizeForMatch.ToString().ToLowerInvariant()"
+                                        data-normslot="@field.NormalizedSlot"
+                                        data-order="@field.DisplayOrder">
+                                    Edit
+                                </button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="rc-card" id="rc-field-editor">
+        <div class="rc-card-head">
+            <h2><span id="rc-field-editor-title">Add a field</span></h2>
+            <button class="btn btn-sm btn-outline-secondary" type="button" id="rc-field-reset">
+                New field
+            </button>
+        </div>
+        <div class="p-3">
+            <form asp-action="SaveField" method="post" class="row g-3" id="rc-field-form">
+                <input type="hidden" name="datasetId" value="@selected.DatasetId">
+                <input type="hidden" name="datasetFieldId" id="datasetFieldId">
+
+                <div class="col-md-3">
+                    <label class="form-label" for="fieldCode">Field code</label>
+                    <input class="form-control" id="fieldCode" name="fieldCode" required
+                           placeholder="REF_PRIMARY">
+                    <div class="form-text">
+                        Rules cite this, case-sensitively. Changing it breaks every rule that names it.
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label" for="displayLabel">Label</label>
+                    <input class="form-control" id="displayLabel" name="displayLabel" required
+                           placeholder="End To End Id">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label" for="dataType">Type</label>
+                    <select class="form-select" id="dataType" name="dataType" required>
+                        @foreach (var type in Enum.GetNames<FieldDataType>())
+                        {
+                            <option value="@type">@type</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label" for="fieldRole">Role</label>
+                    <select class="form-select" id="fieldRole" name="fieldRole">
+                        <option value="">(none)</option>
+                        @foreach (var role in Enum.GetNames<FieldRole>())
+                        {
+                            <option value="@role">@role</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label" for="displayOrder">Order</label>
+                    <input class="form-control" type="number" id="displayOrder" name="displayOrder"
+                           value="@(selected.Fields.Count + 1)" required>
+                </div>
+
+                <div class="col-md-3">
+                    <label class="form-label" for="storageSlot">Storage slot</label>
+                    <select class="form-select" id="storageSlot" name="storageSlot" required>
+                        @foreach (var slot in slots.Where(s => !s.NormalizedOnly))
+                        {
+                            <option value="@slot.Name" data-type="@slot.Type"
+                                    data-used="@(usedSlots.Contains(slot.Name).ToString().ToLowerInvariant())">
+                                @slot.Name@(slot.MaxLength is { } length ? $" ({length})" : "")@(usedSlots.Contains(slot.Name) ? " — in use" : "")
+                            </option>
+                        }
+                    </select>
+                    <div class="form-text">
+                        The slot's type must equal the field's type, and it must come from the
+                        reservable pool — the database enforces both.
+                    </div>
+                </div>
+
+                <div class="col-md-3">
+                    <label class="form-label" for="normalizedSlot">Normalized companion</label>
+                    <select class="form-select" id="normalizedSlot" name="normalizedSlot">
+                        <option value="">(none)</option>
+                        @foreach (var slot in slots.Where(s => s.NormalizedOnly))
+                        {
+                            <option value="@slot.Name"
+                                    data-used="@(usedCompanions.Contains(slot.Name).ToString().ToLowerInvariant())">
+                                @slot.Name@(usedCompanions.Contains(slot.Name) ? " — in use" : "")
+                            </option>
+                        }
+                    </select>
+                    <div class="form-text">
+                        Text21..Text30 only. The pools are separate because a companion could
+                        otherwise silently overwrite a mapped field.
+                    </div>
+                </div>
+
+                <div class="col-md-6">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="isMatchable" name="isMatchable"
+                               value="true" checked>
+                        <input type="hidden" name="isMatchable" value="false">
+                        <label class="form-check-label" for="isMatchable">
+                            <strong>Matchable</strong> — may appear in a rule condition
+                        </label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="isIndexed" name="isIndexed"
+                               value="true">
+                        <input type="hidden" name="isIndexed" value="false">
+                        <label class="form-check-label" for="isIndexed">
+                            <strong>Indexed</strong> — maintain an index on it (at most four per
+                            dataset; every extra index is a 2M-row cost on every load)
+                        </label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="isRequired" name="isRequired"
+                               value="true">
+                        <input type="hidden" name="isRequired" value="false">
+                        <label class="form-check-label" for="isRequired">
+                            <strong>Required</strong> — a row without it is a parse error
+                        </label>
+                    </div>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="normalizeForMatch"
+                               name="normalizeForMatch" value="true">
+                        <input type="hidden" name="normalizeForMatch" value="false">
+                        <label class="form-check-label" for="normalizeForMatch">
+                            <strong>Normalize at load</strong> — write an upper-cased, trimmed copy
+                            into the companion slot so a rule can compare it with an indexed
+                            <code>Exact</code> match instead of forcing a scan
+                        </label>
+                    </div>
+                </div>
+
+                <div class="col-12 d-flex gap-2">
+                    <button class="btn btn-primary" type="submit">Save field</button>
+                    <span class="rc-help align-self-center" id="rc-field-hint"></span>
+                </div>
+            </form>
+        </div>
+    </div>
+}
+
+@section Scripts {
+    <script src="~/js/datasets.js"></script>
+}

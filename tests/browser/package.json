@@ -1,0 +1,12 @@
+{
+  "name": "recon-portal-browser-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Drives the ASP.NET Core MVC portal in a real browser against the demo database. Playwright only; the portal itself has no build step.",
+  "scripts": {
+    "test": "node drive-portal.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.49.1"
+  }
+}

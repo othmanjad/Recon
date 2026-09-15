@@ -1,0 +1,47 @@
+@{
+    var returnUrl = ViewData["ReturnUrl"] as string;
+}
+<div class="row justify-content-center">
+    <div class="col-md-7 col-lg-5">
+        <div class="rc-card">
+            <div class="rc-card-head">
+                <h2>Sign in</h2>
+            </div>
+            <div class="p-3">
+                @*
+                    Stated rather than implied: this does not authenticate
+                    anybody. It names the operator so the audit log has a
+                    subject and the per-counterparty checks have someone to
+                    check. A deployment replaces it with the bank's identity
+                    provider; the authorization logic reads claims and does not
+                    care where they came from.
+                *@
+                <div class="alert alert-warning d-flex gap-2 align-items-start" role="alert">
+                    <i class="bi bi-exclamation-triangle fs-5" aria-hidden="true"></i>
+                    <div class="small">
+                        <strong>Development sign-in.</strong> This verifies nothing. It records who
+                        you claim to be so that the audit log has a subject and access checks have
+                        someone to check. Replace it with the bank's identity provider before any
+                        deployment.
+                    </div>
+                </div>
+
+                <form asp-action="SignIn" method="post">
+                    <input type="hidden" name="returnUrl" value="@returnUrl">
+                    <div class="mb-3">
+                        <label class="form-label" for="userName">Operator</label>
+                        <input class="form-control" id="userName" name="userName" required
+                               autocomplete="username" autofocus
+                               placeholder="ops.hala">
+                        <div class="form-text">
+                            Your counterparty grants are looked up by this name in
+                            <code>cfg.UserCounterpartyAccess</code>. A name with no grants sees no
+                            data — which is the correct default, not an error.
+                        </div>
+                    </div>
+                    <button class="btn btn-primary" type="submit">Sign in</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>

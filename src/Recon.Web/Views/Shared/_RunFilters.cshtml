@@ -1,0 +1,26 @@
+@model DashboardModel
+@{
+    var action = ViewContext.RouteData.Values["action"]?.ToString() ?? "Index";
+    var controller = ViewContext.RouteData.Values["controller"]?.ToString() ?? "Home";
+}
+<form class="d-flex gap-2 flex-wrap rc-picker" method="get" asp-controller="@controller" asp-action="@action">
+    <select class="form-select form-select-sm" name="definitionId" style="width:auto" aria-label="Definition">
+        <option value="">All definitions</option>
+        @foreach (var definition in Model.Definitions)
+        {
+            <option value="@definition.DefinitionId"
+                    selected="@(Model.SelectedDefinitionId == definition.DefinitionId)">
+                @definition.Code
+            </option>
+        }
+    </select>
+    <select class="form-select form-select-sm" name="status" style="width:auto" aria-label="Status">
+        <option value="">All statuses</option>
+        @foreach (var status in new[] { "Completed", "Running", "Failed", "Rejected", "Resuming", "Pending" })
+        {
+            <option value="@status" selected="@(Model.SelectedStatus == status)">@status</option>
+        }
+    </select>
+    <button class="btn btn-sm btn-primary" type="submit">Apply</button>
+    <a class="btn btn-sm btn-outline-secondary" asp-controller="@controller" asp-action="@action">Reset</a>
+</form>

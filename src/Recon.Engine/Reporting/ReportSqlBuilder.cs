@@ -17,6 +17,30 @@ namespace Recon.Engine.Reporting;
 /// </summary>
 public static class ReportSqlBuilder
 {
+    /// <summary>
+    /// The computed columns a report may name, beside a registry field.
+    ///
+    /// <para>
+    /// Public so the report builder in the portal can offer exactly these and
+    /// refuse anything else on save. The set and the switch in
+    /// <c>ColumnExpression</c> are the same list in two places by necessity —
+    /// one maps a name to SQL, the other validates before storage — so the
+    /// switch reads its cases from here and a name added to one without the
+    /// other fails a test rather than a run.
+    /// </para>
+    /// </summary>
+    public static readonly IReadOnlySet<string> ComputedColumns =
+        new HashSet<string>(StringComparer.Ordinal)
+        {
+            "StagingId",
+            "TxDate",
+            "MatchStatus",
+            "ExceptionCode",
+            "MatchedWithId",
+            "RawRowNumber",
+            "MatchedByRuleCode",
+        };
+
     public static CompiledStatement Compile(
         ReportDefinition report,
         ReconciliationDefinition definition,
@@ -106,15 +130,31 @@ public static class ReportSqlBuilder
 
         if (column.Field is { } field)
         {
+            // A transaction-level report returns rows from BOTH sides, so
+            // every column is compiled twice — once per dataset. The column
+            // names a field of one side, and the two sides name nothing alike:
+            // the left's REF_PRIMARY has no counterpart by that name in
+            // OM_TXN, and resolving it there threw FieldNotInRegistry, which
+            // made every such export fail. So the column is mapped to this
+            // side's equivalent field, and to a typed NULL when there is
+            // none — the UNION needs the same column list either way.
+            var resolved = Counterpart(field, dataset);
+
+            if (resolved is null)
+            {
+                return $"{TypedNull(field.DataType)} AS {name}";
+            }
+
             // requireMatchable: false — a report may show a field the rule
             // builder withholds. Currency is the obvious case: not a matching
             // key, but every money column needs it.
-            var slot = SqlQueryBuilder.ResolveSlot(dataset, field.FieldCode, requireMatchable: false);
+            var slot = SqlQueryBuilder.ResolveSlot(dataset, resolved.FieldCode, requireMatchable: false);
             return $"{alias}.{slot} AS {name}";
         }
 
         // A closed set, mapped here rather than interpolated: these are the
-        // computed values the schema's ComputedField column documents.
+        // computed values the schema's ComputedField column documents, and
+        // ComputedColumns above is the same set for the builder to offer.
         var expression = column.ComputedField switch
         {
             "StagingId" => $"{alias}.StagingId",
@@ -132,6 +172,60 @@ public static class ReportSqlBuilder
 
         return $"{expression} AS {name}";
     }
+
+    /// <summary>
+    /// This side's equivalent of a column's field.
+    ///
+    /// <para>
+    /// The same code wins when the other dataset happens to use it — the
+    /// demo's <c>CURRENCY</c>, <c>DIRECTION</c> and <c>STATUS</c> are spelled
+    /// identically on both sides. Otherwise the field's ROLE decides, which
+    /// is the mechanism the whole platform uses to stay counterparty-agnostic:
+    /// the equivalent of the left's reference is the right's field whose role
+    /// is <see cref="FieldRole.Reference"/>, whatever the partner calls it.
+    /// </para>
+    ///
+    /// <para>
+    /// A counterpart of a different declared type is refused rather than
+    /// used. The two sides' columns are combined with <c>UNION ALL</c>, and a
+    /// text slot stacked under an integer one would either fail to convert or,
+    /// worse, convert: the report would be well-formed and wrong.
+    /// </para>
+    /// </summary>
+    private static DatasetField? Counterpart(DatasetField field, Dataset dataset)
+    {
+        if (field.DatasetId == dataset.DatasetId)
+        {
+            return field;
+        }
+
+        if (dataset.TryGetField(field.FieldCode, out var byCode))
+        {
+            return byCode.DataType == field.DataType ? byCode : null;
+        }
+
+        if (field.Role is not { } role)
+        {
+            return null;
+        }
+
+        var byRole = dataset.FieldWithRole(role);
+        return byRole is not null && byRole.DataType == field.DataType ? byRole : null;
+    }
+
+    /// <summary>
+    /// A NULL of the slot type the field would have occupied, so the two
+    /// halves of the UNION agree on every column's type.
+    /// </summary>
+    private static string TypedNull(FieldDataType type) => type switch
+    {
+        FieldDataType.String => "CAST(NULL AS NVARCHAR(300))",
+        FieldDataType.Integer => "CAST(NULL AS BIGINT)",
+        FieldDataType.Decimal => "CAST(NULL AS DECIMAL(18,3))",
+        FieldDataType.DateTime => "CAST(NULL AS DATETIME2(3))",
+        FieldDataType.Boolean => "CAST(NULL AS BIT)",
+        _ => throw new SqlCompilationException($"unknown field data type '{type}'"),
+    };
 
     private static CompiledStatement CompileExceptions(
         ReportDefinition report, ReconciliationDefinition definition, long runId)

@@ -272,11 +272,17 @@ public sealed class AlertDetector(SqlConnection connection)
             JOIN ops.ReconRun AS run ON run.RunId = p.RunId
             JOIN cfg.ReconciliationDefinition AS d ON d.DefinitionId = run.DefinitionId
             WHERE p.Sequence = p.LastSequence
-              AND p.TotalMatched > 0
               AND run.IsCurrent = 1
               AND run.RunType <> 'Sandbox'
               AND run.CompletedAt >= DATEADD(DAY, -1, SYSDATETIME())
-              AND 100.0 * p.Matched / p.TotalMatched > @threshold;
+              -- NULLIF here, not a sibling `TotalMatched > 0` predicate.
+              -- SQL Server does not promise to evaluate the guard first, so
+              -- a run whose passes matched nothing raised "divide by zero"
+              -- and took the whole scheduler tick down with it — alerts and
+              -- housekeeping included. A run with no matches simply has no
+              -- distribution, so the comparison is UNKNOWN and the row is
+              -- filtered out, which is the answer we want.
+              AND 100.0 * p.Matched / NULLIF(p.TotalMatched, 0) > @threshold;
             """,
             r => new AlertEvent
             {

@@ -1,0 +1,26 @@
+<div class="row justify-content-center">
+    <div class="col-lg-7">
+        <div class="rc-card">
+            <div class="rc-card-head">
+                <h2>Something went wrong</h2>
+            </div>
+            <div class="p-4">
+                <p>
+                    <i class="bi bi-exclamation-octagon text-danger fs-4 align-middle" aria-hidden="true"></i>
+                    <span class="align-middle ms-2">
+                        That request failed. The details are in the application log with the request
+                        id, which is where they belong — an error page is the wrong place to print
+                        a connection string or a query.
+                    </span>
+                </p>
+                <p class="rc-help mb-4">
+                    If a run was in progress it is unaffected: runs checkpoint per step and resume
+                    from the last completed one rather than starting over.
+                </p>
+                <a class="btn btn-outline-secondary" asp-controller="Home" asp-action="Index">
+                    Back to the dashboard
+                </a>
+            </div>
+        </div>
+    </div>
+</div>

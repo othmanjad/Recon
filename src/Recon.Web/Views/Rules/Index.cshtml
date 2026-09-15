@@ -1,0 +1,463 @@
+@using Recon.Domain.Configuration
+@using Recon.Web.Services
+@inject Microsoft.AspNetCore.Antiforgery.IAntiforgery Xsrf
+@{
+    var definitions = (List<DefinitionRow>)ViewData["Definitions"]!;
+    var definition = ViewData["Selected"] as ReconciliationDefinition;
+    var problems = (IReadOnlyList<string>)ViewData["Problems"]!;
+    var replayable = ViewData["Replayable"] as List<SandboxSource> ?? [];
+
+    object Fields(Dataset dataset) => dataset.Fields
+        .OrderBy(f => f.DisplayOrder)
+        .Select(f => new
+        {
+            code = f.FieldCode,
+            label = f.DisplayLabel,
+            type = f.DataType.ToString(),
+            role = f.Role?.ToString(),
+            matchable = f.IsMatchable,
+            indexed = f.IsIndexed,
+            normalize = f.NormalizeForMatch,
+        });
+}
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+    <h1 class="h4 mb-0">Rule builder</h1>
+    <form method="get" asp-action="Index" class="d-flex gap-2 rc-picker">
+        <select class="form-select form-select-sm" name="id" style="width:auto" aria-label="Definition">
+            @foreach (var row in definitions)
+            {
+                <option value="@row.DefinitionId" selected="@(definition?.DefinitionId == row.DefinitionId)">
+                    @row.Code — @row.Name
+                </option>
+            }
+        </select>
+        <button class="btn btn-sm btn-primary" type="submit">Open</button>
+    </form>
+</div>
+
+@*
+    The design's single most important safety property (§6), stated where
+    the rules are built: both sides of every condition come from the field
+    registries, never from typed text.
+*@
+<div class="alert alert-light border d-flex gap-2 align-items-start">
+    <i class="bi bi-shield-check fs-5 text-primary" aria-hidden="true"></i>
+    <div class="small">
+        <strong>Why this builder is safe.</strong> Every field in every condition is chosen from a
+        dataset's field registry and submitted as a code that the server resolves against that
+        same registry. A code that is not in it, or is in it but not marked matchable, is refused
+        before anything is written — and one class, only one, turns a resolved condition into SQL,
+        with every value parameterized.
+    </div>
+</div>
+
+@if (definition is null)
+{
+    <div class="rc-card"><div class="rc-empty">No definition is visible to you.</div></div>
+}
+else
+{
+    <div class="row g-3 mb-3">
+        <div class="col-lg-8">
+            <div class="rc-card h-100">
+                <div class="rc-card-head">
+                    <h2>@definition.Code — @definition.Name</h2>
+                    @if (definition.IsActive)
+                    {
+                        <span class="badge text-bg-success">Active</span>
+                    }
+                    else
+                    {
+                        <span class="badge text-bg-secondary">Inactive</span>
+                    }
+                </div>
+                <div class="p-3 small">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <div class="rc-tile-label">Left dataset</div>
+                            <div class="rc-mono">@definition.Left.Code</div>
+                            <div class="rc-help">
+                                @definition.Left.Fields.Count fields,
+                                @definition.Left.Matchable.Count() matchable
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <div class="rc-tile-label">Right dataset</div>
+                            <div class="rc-mono">@definition.Right.Code</div>
+                            <div class="rc-help">
+                                @definition.Right.Fields.Count fields,
+                                @definition.Right.Matchable.Count() matchable
+                            </div>
+                        </div>
+                    </div>
+                    <hr>
+                    <div>
+                        Matching window: <strong>−@definition.MatchingWindowDaysBefore</strong> /
+                        <strong>+@definition.MatchingWindowDaysAfter</strong> days around the
+                        business date. Late arrivals mean the range is never simply
+                        "= business date".
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-lg-4">
+            <div class="rc-card h-100">
+                <div class="rc-card-head"><h2>Activation</h2></div>
+                <div class="p-3">
+                    @if (problems.Count == 0)
+                    {
+                        <div class="d-flex gap-2 align-items-start small">
+                            <i class="bi bi-check-circle text-success fs-5" aria-hidden="true"></i>
+                            <div>
+                                This definition can run: both registries carry the universal roles,
+                                there is an active pass, and the first pass can seek an index.
+                            </div>
+                        </div>
+                    }
+                    else
+                    {
+                        <ul class="mb-0 small text-danger">
+                            @foreach (var problem in problems)
+                            {
+                                <li class="mb-1">@problem</li>
+                            }
+                        </ul>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <h2 class="h6 text-uppercase rc-help mb-2">Passes</h2>
+
+    @*
+        Passes run in order and write only to ops.MatchResult; staging is
+        never updated mid-run. "Still unmatched" for pass N is an anti-join
+        against passes 1..N-1 — which is why the order on screen is the order
+        in the run.
+    *@
+    <p class="rc-help mb-3">
+        Passes run in sequence. Each one sees only what the passes before it left unmatched, so
+        pass 1 should be the strictest, cheapest match — and a first pass whose comparison cannot
+        seek an index scans both sides in full, which at 2M rows a day is the difference between a
+        minute and an hour.
+    </p>
+
+    @foreach (var pass in definition.Rules.OrderBy(r => r.Sequence))
+    {
+        <div class="rc-pass">
+            <form asp-action="SavePass" method="post">
+                <input type="hidden" name="definitionId" value="@definition.DefinitionId">
+                <input type="hidden" name="matchRuleId" value="@pass.MatchRuleId">
+
+                <div class="rc-pass-head">
+                    <span class="rc-seq">@pass.Sequence</span>
+                    <input class="form-control form-control-sm rc-mono" name="ruleCode"
+                           value="@pass.RuleCode" style="width:190px" required aria-label="Rule code">
+                    <input class="form-control form-control-sm" name="name" value="@pass.Name"
+                           style="width:260px" required aria-label="Pass name">
+                    <input class="form-control form-control-sm" type="number" name="sequence"
+                           value="@pass.Sequence" style="width:80px" required aria-label="Sequence">
+
+                    <select class="form-select form-select-sm" name="matchMode" style="width:auto"
+                            aria-label="Match mode">
+                        @foreach (var mode in Enum.GetNames<MatchMode>())
+                        {
+                            <option value="@mode" selected="@(pass.Mode.ToString() == mode)">@mode</option>
+                        }
+                    </select>
+
+                    <select class="form-select form-select-sm" name="onMultipleMatch" style="width:auto"
+                            aria-label="On multiple match">
+                        @foreach (var choice in Enum.GetNames<OnMultipleMatch>())
+                        {
+                            <option value="@choice" selected="@(pass.OnMultipleMatch.ToString() == choice)">
+                                @choice
+                            </option>
+                        }
+                    </select>
+
+                    @if (!pass.IsFullySeekable)
+                    {
+                        <span class="badge text-bg-warning" title="A comparison in this pass cannot use an index">
+                            <i class="bi bi-exclamation-triangle" aria-hidden="true"></i> scans
+                        </span>
+                    }
+
+                    <div class="ms-auto d-flex gap-2">
+                        <button class="btn btn-sm btn-primary" type="submit">Save pass</button>
+                    </div>
+                </div>
+
+                <div class="rc-conditions" data-pass="@pass.MatchRuleId">
+                    @foreach (var condition in pass.Conditions.OrderBy(c => c.Sequence))
+                    {
+                        var scanning = condition.Comparison is ComparisonType.Contains or ComparisonType.EndsWith;
+                        <div class="rc-cond-row @(scanning ? "rc-warn-nonsargable" : null)">
+                            <div class="row g-2 align-items-center">
+                                <div class="col-md-3">
+                                    <select class="form-select form-select-sm rc-left" name="leftFieldCodes"
+                                            aria-label="Left field">
+                                        @* The data- attributes are what the
+                                           builder's advice reads: without them
+                                           on the server-rendered options, a
+                                           saved condition comparing two
+                                           normalized companions was told it
+                                           had none. *@
+                                        @foreach (var field in definition.Left.Matchable.OrderBy(f => f.DisplayOrder))
+                                        {
+                                            <option value="@field.FieldCode"
+                                                    data-type="@field.DataType"
+                                                    data-normalize="@field.NormalizeForMatch.ToString().ToLowerInvariant()"
+                                                    data-indexed="@field.IsIndexed.ToString().ToLowerInvariant()"
+                                                    selected="@(field.FieldCode == condition.LeftFieldCode)">
+                                                @field.DisplayLabel (@field.FieldCode)
+                                            </option>
+                                        }
+                                    </select>
+                                </div>
+                                <div class="col-md-2">
+                                    <select class="form-select form-select-sm rc-cmp" name="comparisons"
+                                            aria-label="Comparison">
+                                        @foreach (var comparison in Enum.GetNames<ComparisonType>())
+                                        {
+                                            <option value="@comparison"
+                                                    selected="@(condition.Comparison.ToString() == comparison)">
+                                                @comparison
+                                            </option>
+                                        }
+                                    </select>
+                                </div>
+                                <div class="col-md-3">
+                                    <select class="form-select form-select-sm rc-right" name="rightFieldCodes"
+                                            aria-label="Right field">
+                                        @foreach (var field in definition.Right.Matchable.OrderBy(f => f.DisplayOrder))
+                                        {
+                                            <option value="@field.FieldCode"
+                                                    data-type="@field.DataType"
+                                                    data-normalize="@field.NormalizeForMatch.ToString().ToLowerInvariant()"
+                                                    data-indexed="@field.IsIndexed.ToString().ToLowerInvariant()"
+                                                    selected="@(field.FieldCode == condition.RightFieldCode)">
+                                                @field.DisplayLabel (@field.FieldCode)
+                                            </option>
+                                        }
+                                    </select>
+                                </div>
+                                <div class="col-md-1">
+                                    <input class="form-control form-control-sm rc-tol" type="number"
+                                           name="tolerances" value="@(condition.ToleranceValue?.ToString())"
+                                           placeholder="tol" aria-label="Tolerance">
+                                </div>
+                                <div class="col-md-2">
+                                    <select class="form-select form-select-sm rc-unit" name="toleranceUnits"
+                                            aria-label="Tolerance unit">
+                                        <option value="">(unit)</option>
+                                        @foreach (var unit in Enum.GetNames<ToleranceUnit>())
+                                        {
+                                            <option value="@unit"
+                                                    selected="@(condition.ToleranceUnit?.ToString() == unit)">
+                                                @unit
+                                            </option>
+                                        }
+                                    </select>
+                                </div>
+                                <div class="col-md-1">
+                                    @*
+                                        A select rather than a checkbox: every
+                                        condition must contribute exactly one
+                                        value to each array, or the arrays stop
+                                        lining up and a tolerance lands on the
+                                        wrong condition.
+                                    *@
+                                    <select class="form-select form-select-sm rc-norm" name="useNormalized"
+                                            aria-label="Compare normalized companions">
+                                        <option value="false" selected="@(!condition.UseNormalized)">raw</option>
+                                        <option value="true" selected="@condition.UseNormalized">norm</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="rc-help mt-1 rc-cond-note"></div>
+                        </div>
+                    }
+                </div>
+
+                <div class="d-flex gap-2 p-2 border-top align-items-center">
+                    <button class="btn btn-sm btn-outline-primary rc-add-cond" type="button">
+                        <i class="bi bi-plus-lg" aria-hidden="true"></i> Add condition
+                    </button>
+                    <span class="rc-help">
+                        Conditions within a pass are ANDed. Saving replaces this pass's conditions
+                        with exactly what is on screen.
+                    </span>
+                </div>
+            </form>
+
+            <form asp-action="DeletePass" method="post" class="p-2 border-top">
+                <input type="hidden" name="definitionId" value="@definition.DefinitionId">
+                <input type="hidden" name="matchRuleId" value="@pass.MatchRuleId">
+                <button class="btn btn-sm btn-outline-danger" type="submit"
+                        data-rc-confirm="Remove pass @pass.Sequence (@pass.RuleCode)? Its match results from past runs are kept.">
+                    Remove pass
+                </button>
+            </form>
+        </div>
+    }
+
+    <div class="rc-pass" id="rc-new-pass">
+        <form asp-action="SavePass" method="post">
+            <input type="hidden" name="definitionId" value="@definition.DefinitionId">
+
+            <div class="rc-pass-head">
+                <span class="rc-seq">+</span>
+                <input class="form-control form-control-sm rc-mono" name="ruleCode"
+                       placeholder="PASS_CODE" style="width:190px" required aria-label="Rule code">
+                <input class="form-control form-control-sm" name="name" placeholder="What it matches"
+                       style="width:260px" required aria-label="Pass name">
+                <input class="form-control form-control-sm" type="number" name="sequence"
+                       value="@(definition.Rules.Count == 0 ? 1 : definition.Rules.Max(r => r.Sequence) + 1)"
+                       style="width:80px" required aria-label="Sequence">
+                <select class="form-select form-select-sm" name="matchMode" style="width:auto"
+                        aria-label="Match mode">
+                    @foreach (var mode in Enum.GetNames<MatchMode>())
+                    {
+                        <option value="@mode">@mode</option>
+                    }
+                </select>
+                <select class="form-select form-select-sm" name="onMultipleMatch" style="width:auto"
+                        aria-label="On multiple match">
+                    @foreach (var choice in Enum.GetNames<OnMultipleMatch>())
+                    {
+                        <option value="@choice">@choice</option>
+                    }
+                </select>
+                <div class="ms-auto">
+                    <button class="btn btn-sm btn-primary" type="submit">Add pass</button>
+                </div>
+            </div>
+
+            <div class="rc-conditions" data-pass="new"></div>
+
+            <div class="d-flex gap-2 p-2 border-top align-items-center">
+                <button class="btn btn-sm btn-outline-primary rc-add-cond" type="button">
+                    <i class="bi bi-plus-lg" aria-hidden="true"></i> Add condition
+                </button>
+                <span class="rc-help">
+                    A pass with no condition is refused: it would match every row against every row.
+                </span>
+            </div>
+        </form>
+    </div>
+
+    <div class="row g-3 mt-2">
+        <div class="col-xl-7">
+            <div class="rc-card h-100">
+                <div class="rc-card-head">
+                    <h2>Row filter (condition tree)</h2>
+                    <span class="rc-help">one schema for rules, classifications, exclusions, sources and reports</span>
+                </div>
+                <div class="p-3">
+                    <p class="rc-help">
+                        A filter narrows which rows a pass considers. It is a structured tree rather
+                        than SQL text, and <code>field</code> is resolved against the registry — an
+                        unknown code, or one the registry does not mark matchable, is rejected here
+                        and never reaches the compiler.
+                    </p>
+                    <label class="form-label" for="ct-json">Filter JSON</label>
+                    <textarea class="form-control rc-mono" id="ct-json" rows="9" spellcheck="false"></textarea>
+                    <div class="d-flex gap-2 mt-2 flex-wrap">
+                        <button class="btn btn-sm btn-primary" id="btn-validate" type="button">Validate</button>
+                        <button class="btn btn-sm btn-outline-secondary" id="btn-sample-ok" type="button">
+                            Load a valid example
+                        </button>
+                        <button class="btn btn-sm btn-outline-danger" id="btn-sample-bad" type="button">
+                            Load a rejected example
+                        </button>
+                    </div>
+                    <div class="mt-3" id="ct-result">
+                        <div class="rc-help">Not validated yet.</div>
+                    </div>
+                    <div class="rc-help mt-2">
+                        Validation runs on the server against
+                        <strong>@definition.Left.Code</strong>'s registry. The same check runs again
+                        on save — this button exists to give an immediate answer, not to be the
+                        boundary.
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-xl-5">
+            <div class="rc-card h-100">
+                <div class="rc-card-head">
+                    <h2>Sandbox dry-run</h2>
+                    <span class="rc-help">design §2.1 step 6 — not optional</span>
+                </div>
+                <div class="p-3">
+                    <p class="rc-help">
+                        Replays the current rule set over a past run's <em>already staged</em> rows
+                        and reports the match rate per pass. Replaying real staged data says how the
+                        rules behave on what actually arrived, rather than on rows somebody chose;
+                        it reuses those rows rather than duplicating 2M of them, and the sandbox run
+                        is excluded from current-run scope and purged by a nightly job.
+                    </p>
+
+                    @if (replayable.Count == 0)
+                    {
+                        <div class="rc-help">
+                            No past run of this definition has staged rows to replay. Run it once
+                            first — a dry-run over nothing would report zero matches and look like a
+                            broken rule set.
+                        </div>
+                    }
+                    else
+                    {
+                        <form asp-action="DryRun" method="post" class="row g-2 align-items-end">
+                            <input type="hidden" name="definitionId" value="@definition.DefinitionId">
+                            <div class="col-8">
+                                <label class="form-label" for="sourceRunId">Replay the staged rows of</label>
+                                <select class="form-select form-select-sm" id="sourceRunId" name="sourceRunId">
+                                    @foreach (var source in replayable)
+                                    {
+                                        <option value="@source.RunId" disabled="@(!source.CanReplay)">
+                                            run @source.RunId · @source.BusinessDate.ToString("yyyy-MM-dd")
+                                            · @Fmt.Count(source.StagedRows) rows@(source.CanReplay ? "" : " — archived")
+                                        </option>
+                                    }
+                                </select>
+                            </div>
+                            <div class="col-4">
+                                <button class="btn btn-sm btn-primary w-100" type="submit">
+                                    <i class="bi bi-play" aria-hidden="true"></i> Dry-run
+                                </button>
+                            </div>
+                        </form>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+
+}
+
+@*
+    A section must sit at the top level of the file, so the guard is inside
+    it rather than around it.
+*@
+@section Scripts {
+    @if (definition is not null)
+    {
+        <script>
+            window.ReconRules = {
+                definitionId: @definition.DefinitionId,
+                left: { code: @Json.Serialize(definition.Left.Code), fields: @Json.Serialize(Fields(definition.Left)) },
+                right: { code: @Json.Serialize(definition.Right.Code), fields: @Json.Serialize(Fields(definition.Right)) },
+                comparisons: @Json.Serialize(Enum.GetNames<ComparisonType>()),
+                units: @Json.Serialize(Enum.GetNames<ToleranceUnit>()),
+                validateUrl: "@Url.Action("ValidateFilter")",
+                token: "@Xsrf.GetAndStoreTokens(Context).RequestToken"
+            };
+        </script>
+        <script src="~/js/condition-tree.js"></script>
+        <script src="~/js/rule-builder.js"></script>
+    }
+}

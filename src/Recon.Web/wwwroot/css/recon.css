@@ -217,6 +217,19 @@ body {
     letter-spacing: 0.03em;
 }
 
+/* ---- header pickers ------------------------------------------------ */
+/* A select with width:auto sizes itself to its longest option, and one of
+   those options is a definition's full name. On a 400px screen that pushed
+   the whole page sideways, so the picker is allowed to wrap and the select
+   is allowed to shrink. min-width:0 is the part that matters: a flex item
+   will not shrink below its content width without it. */
+.rc-picker { flex-wrap: wrap; }
+.rc-picker select,
+.rc-picker input {
+    max-width: 100%;
+    min-width: 0;
+}
+
 /* ---- misc ---------------------------------------------------------- */
 .rc-empty { padding: 36px 16px; text-align: center; color: var(--rc-muted); }
 .rc-help { font-size: 12px; color: var(--rc-muted); }

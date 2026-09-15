@@ -1,0 +1,163 @@
+@model DashboardModel
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+    <h1 class="h4 mb-0">Run dashboard</h1>
+    <partial name="_RunFilters" model="Model" />
+</div>
+
+@if (!Model.HasAnyAccess)
+{
+    @*
+        An empty table would say "nothing exists". This says "you have no
+        grants", which is a different fact and the correct default for a new
+        account.
+    *@
+    <div class="alert alert-info d-flex gap-2 align-items-start" role="alert">
+        <i class="bi bi-person-lock fs-5" aria-hidden="true"></i>
+        <div>
+            <strong>You have no counterparty grants.</strong>
+            <div class="small">
+                Access is scoped per counterparty (design §13), and this account holds none — so
+                every screen is empty by rule rather than because the platform has no data. Ask an
+                administrator for a grant in <code>cfg.UserCounterpartyAccess</code>.
+            </div>
+        </div>
+    </div>
+}
+
+<div class="row g-3 mb-3">
+    <div class="col-sm-6 col-xl-3">
+        <div class="rc-tile">
+            <div class="rc-tile-label">Current runs</div>
+            <div class="rc-tile-value">@Fmt.Count(Model.CurrentRunCount)</div>
+            <div class="rc-tile-sub">
+                @Fmt.Count(Model.RunningCount) running · @Fmt.Count(Model.FailedCount) failed
+            </div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+        <div class="rc-tile">
+            <div class="rc-tile-label">Matched rows</div>
+            <div class="rc-tile-value">@Fmt.Count(Model.MatchedRows)</div>
+            <div class="rc-tile-sub">across the current runs only</div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+        <div class="rc-tile">
+            <div class="rc-tile-label">Unmatched rows</div>
+            <div class="rc-tile-value @(Model.UnmatchedRows > 0 ? "text-danger" : null)">
+                @Fmt.Count(Model.UnmatchedRows)
+            </div>
+            <div class="rc-tile-sub">
+                <a asp-controller="Exceptions" asp-action="Index">open the exception workspace</a>
+            </div>
+        </div>
+    </div>
+    <div class="col-sm-6 col-xl-3">
+        <div class="rc-tile">
+            <div class="rc-tile-label">Ambiguous rows</div>
+            <div class="rc-tile-value @(Model.AmbiguousRows > 0 ? "text-danger" : null)">
+                @Fmt.Count(Model.AmbiguousRows)
+            </div>
+            <div class="rc-tile-sub">a pass found several candidates and picked none</div>
+        </div>
+    </div>
+</div>
+
+@*
+    Tiles come from current runs only. Including superseded reruns would
+    double-count a corrected day, which is the whole reason IsCurrent exists.
+*@
+<p class="rc-help mb-3">
+    Totals cover the <strong>current</strong> run for each business date. A rerun supersedes the
+    run it corrects, and counting both would double a day that was fixed.
+</p>
+
+<div class="rc-card mb-3">
+    <div class="rc-card-head">
+        <h2>Runs</h2>
+        <span class="rc-help">@Model.Runs.Count shown, newest first</span>
+    </div>
+    <partial name="_RunTable" model="Model.Runs" />
+</div>
+
+<div class="row g-3">
+    <div class="col-xl-7">
+        <div class="rc-card h-100">
+            <div class="rc-card-head"><h2>Definitions</h2></div>
+            <div class="rc-table-scroll">
+                <table class="table rc-table align-middle">
+                    <thead>
+                        <tr>
+                            <th>Code</th><th>Left ↔ Right</th>
+                            <th class="text-end">Window</th>
+                            <th class="text-end">Active passes</th>
+                            <th>Status</th><th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (Model.Definitions.Count == 0)
+                        {
+                            <tr><td colspan="6" class="rc-empty">No definitions are visible to you.</td></tr>
+                        }
+                        @foreach (var definition in Model.Definitions)
+                        {
+                            <tr>
+                                <td>
+                                    <div>@definition.Code</div>
+                                    <div class="rc-help">@definition.Name</div>
+                                </td>
+                                <td class="rc-mono">@definition.LeftDatasetCode ↔ @definition.RightDatasetCode</td>
+                                <td class="rc-num">−@definition.WindowBefore / +@definition.WindowAfter d</td>
+                                <td class="rc-num">@definition.ActivePasses</td>
+                                <td>
+                                    @if (definition.IsActive)
+                                    {
+                                        <span class="badge text-bg-success">Active</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge text-bg-secondary">Inactive</span>
+                                    }
+                                </td>
+                                <td class="text-end">
+                                    <a class="btn btn-sm btn-outline-secondary"
+                                       asp-controller="Rules" asp-action="Index" asp-route-id="@definition.DefinitionId">
+                                        Rules
+                                    </a>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <div class="col-xl-5">
+        <div class="rc-card h-100">
+            <div class="rc-card-head"><h2>What to look at first</h2></div>
+            <div class="p-3">
+                <ul class="mb-0 small">
+                    <li class="mb-2">
+                        <strong>A failed run.</strong> Open it: every step carries its own status,
+                        timing and the SQL it ran, so the failure is located rather than guessed at.
+                    </li>
+                    <li class="mb-2">
+                        <strong>Ambiguous rows above zero.</strong> A pass found several candidates
+                        and refused to choose. At 2M rows a day duplicate references are certain, and
+                        silently picking one is how a platform loses its credibility.
+                    </li>
+                    <li class="mb-2">
+                        <strong>The match distribution on the run detail page.</strong> A rising
+                        share of matches falling to the last pass means the clean reference match is
+                        degrading upstream — the early warning, not a progress bar.
+                    </li>
+                    <li>
+                        <strong>A run that is fully matched but does not balance.</strong> That is a
+                        failed run, not a successful one; the control totals on the detail page say
+                        which check broke.
+                    </li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>

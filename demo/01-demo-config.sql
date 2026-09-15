@@ -42,6 +42,27 @@ DELETE cfg.ControlTotalDefinition WHERE DefinitionId IN
 DELETE cfg.ClassificationRule WHERE DefinitionId IN
     (SELECT DefinitionId FROM cfg.ReconciliationDefinition WHERE Code = 'CLIQ_OM');
 DELETE cfg.ReconciliationDefinition WHERE Code = 'CLIQ_OM';
+DELETE cfg.ReportColumn WHERE ReportDefinitionId IN
+    (SELECT ReportDefinitionId FROM cfg.ReportDefinition WHERE DefinitionId IN
+        (SELECT DefinitionId FROM cfg.ReconciliationDefinition WHERE Code = 'CLIQ_OM'));
+DELETE cfg.ReportDefinition WHERE DefinitionId IN
+    (SELECT DefinitionId FROM cfg.ReconciliationDefinition WHERE Code = 'CLIQ_OM');
+DELETE cfg.ScheduleDefinition WHERE DefinitionId IN
+    (SELECT DefinitionId FROM cfg.ReconciliationDefinition WHERE Code = 'CLIQ_OM');
+DELETE cfg.AlertPolicy WHERE DefinitionId IN
+    (SELECT DefinitionId FROM cfg.ReconciliationDefinition WHERE Code = 'CLIQ_OM');
+DELETE cfg.FeeApplicability WHERE DatasetId IN
+    (SELECT DatasetId FROM cfg.Dataset WHERE Code IN ('CLIQ_SESSION','OM_TXN'));
+DELETE ops.InterchangeSummary WHERE RunId IN
+    (SELECT RunId FROM ops.ReconRun WHERE DefinitionId IN
+        (SELECT DefinitionId FROM cfg.ReconciliationDefinition WHERE Code = 'CLIQ_OM'));
+DELETE cfg.FeeTier WHERE FeeScheduleId IN
+    (SELECT FeeScheduleId FROM cfg.FeeSchedule WHERE CounterpartyId IN
+        (SELECT CounterpartyId FROM cfg.Counterparty WHERE Code = 'JOPACC'));
+DELETE cfg.FeeSchedule WHERE CounterpartyId IN
+    (SELECT CounterpartyId FROM cfg.Counterparty WHERE Code = 'JOPACC');
+DELETE cfg.UserCounterpartyAccess WHERE CounterpartyId IN
+    (SELECT CounterpartyId FROM cfg.Counterparty WHERE Code = 'JOPACC');
 DELETE cfg.ExclusionRule WHERE DatasetId IN
     (SELECT DatasetId FROM cfg.Dataset WHERE Code IN ('CLIQ_SESSION','OM_TXN'));
 DELETE cfg.FieldMapping WHERE FileFormatId IN
@@ -339,3 +360,151 @@ FROM cfg.ReconciliationDefinition AS d
 JOIN cfg.Dataset AS l ON l.DatasetId = d.LeftDatasetId
 JOIN cfg.Dataset AS r ON r.DatasetId = d.RightDatasetId
 WHERE d.Code = 'CLIQ_OM';
+
+
+/* ---------------------------------------------------------------------
+   11. Portal access.
+
+   Access is scoped per counterparty (design §13), and the portal filters
+   every read by these rows IN SQL. Three users so the levels are visible
+   rather than described: the same screen looks different to each of them,
+   and a fourth name with no row here sees nothing at all — which is the
+   correct default for a new account, not an error.
+   --------------------------------------------------------------------- */
+DECLARE @cp INT = (SELECT CounterpartyId FROM cfg.Counterparty WHERE Code = 'JOPACC');
+
+INSERT cfg.UserCounterpartyAccess (UserName, CounterpartyId, AccessLevel, GrantedBy)
+VALUES
+    (N'cfg.omar',  @cp, 'Configure', N'demo'),
+    (N'ops.hala',  @cp, 'Operate',   N'demo'),
+    (N'read.sami', @cp, 'Read',      N'demo');
+GO
+
+
+/* ---------------------------------------------------------------------
+   12. The schedule.
+
+   Evaluated in the SCHEDULE's time zone, not the server's: a server in
+   UTC firing '22:00' for a Jordan session would fire at 01:00 local,
+   which is the wrong business date. ExpectedFileByTime is what makes a
+   file that never arrived distinguishable from one not due yet.
+   --------------------------------------------------------------------- */
+DECLARE @def INT = (SELECT DefinitionId FROM cfg.ReconciliationDefinition WHERE Code = 'CLIQ_OM');
+
+INSERT cfg.ScheduleDefinition
+    (DefinitionId, CronExpression, TimeZone, ExpectedFileByTime, IsEnabled)
+VALUES (@def, '0 22 * * *', 'Asia/Amman', '21:30', 1);
+GO
+
+
+/* ---------------------------------------------------------------------
+   13. Fees and interchange (Phase 5).
+
+   Every amount is in MINOR UNITS of the schedule's currency: JOD has
+   three, so 0.150 JOD is 150. Bands are continuous and the top band is
+   open-ended — a gap would fail the run rather than silently charge
+   nothing.
+
+   Two schedules, because netting needs both sides: what the scheme pays
+   us for inward traffic (Revenue) and what we pay for outward (Cost).
+   --------------------------------------------------------------------- */
+DECLARE @cp INT = (SELECT CounterpartyId FROM cfg.Counterparty WHERE Code = 'JOPACC');
+DECLARE @left INT = (SELECT DatasetId FROM cfg.Dataset WHERE Code = 'CLIQ_SESSION');
+
+INSERT cfg.FeeSchedule
+    (CounterpartyId, Code, Name, Direction, TransactionType, FeeParty,
+     CurrencyCode, RoundingMode, EffectiveFrom, EffectiveTo, IsActive)
+VALUES
+    (@cp, 'CLIQ_IN_2026', N'CliQ inward interchange 2026',  'Inward',  NULL, 'Revenue',
+     'JOD', 'HalfUp', '2026-01-01', NULL, 1),
+    (@cp, 'CLIQ_OUT_2026', N'CliQ outward interchange 2026', 'Outward', NULL, 'Cost',
+     'JOD', 'HalfUp', '2026-01-01', NULL, 1);
+GO
+
+DECLARE @in INT = (SELECT FeeScheduleId FROM cfg.FeeSchedule WHERE Code = 'CLIQ_IN_2026');
+DECLARE @out INT = (SELECT FeeScheduleId FROM cfg.FeeSchedule WHERE Code = 'CLIQ_OUT_2026');
+
+/* Continuous from zero, open-ended at the top. 100000 minor = 100.000 JOD. */
+INSERT cfg.FeeTier
+    (FeeScheduleId, AmountFromMinor, AmountToMinor, CalculationType,
+     FixedAmountMinor, Percentage, MinFeeMinor, MaxFeeMinor)
+VALUES
+    (@in,  0,      100000, 'Fixed',              100, 0,    NULL, NULL),
+    (@in,  100001, NULL,   'FixedPlusPercentage', 100, 0.1, 150,  2000),
+    (@out, 0,      NULL,   'Percentage',           0,  0.2, 50,   1500);
+GO
+
+/* Whether fees apply at all is configuration, not an assumption: it is
+   confirmed that some reconciliation reports carry fees and some do not. */
+DECLARE @left INT = (SELECT DatasetId FROM cfg.Dataset WHERE Code = 'CLIQ_SESSION');
+DECLARE @in INT = (SELECT FeeScheduleId FROM cfg.FeeSchedule WHERE Code = 'CLIQ_IN_2026');
+
+INSERT cfg.FeeApplicability (DatasetId, TransactionType, IsFeeApplicable, FeeScheduleId)
+VALUES (@left, NULL, 1, @in);
+GO
+
+
+/* ---------------------------------------------------------------------
+   14. Reports (Phase 4).
+
+   Columns name registry fields or one of the compiler's documented
+   computed values — never free text. The unmatched report is CSV because
+   a transaction-level scope on a 2M-row day exceeds a worksheet's
+   1,048,576 rows (E1); the exception report is small enough for Xlsx.
+   --------------------------------------------------------------------- */
+DECLARE @def INT = (SELECT DefinitionId FROM cfg.ReconciliationDefinition WHERE Code = 'CLIQ_OM');
+
+INSERT cfg.ReportDefinition
+    (DefinitionId, Code, Name, SheetName, DataScope, FilterJson, OutputFormat,
+     IncludeSubtotals, IsActive)
+VALUES
+    (@def, 'UNMATCHED_CSV', N'Unmatched transactions', N'Unmatched', 'Unmatched',
+     NULL, 'Csv', 0, 1),
+    (@def, 'EXCEPTIONS_XLSX', N'Open exceptions', N'Exceptions', 'Exceptions',
+     NULL, 'Xlsx', 0, 1),
+    (@def, 'CONTROL_TOTALS', N'Control totals', N'Totals', 'ControlTotals',
+     NULL, 'Xlsx', 0, 1);
+GO
+
+DECLARE @left INT = (SELECT DatasetId FROM cfg.Dataset WHERE Code = 'CLIQ_SESSION');
+DECLARE @unmatched INT = (SELECT ReportDefinitionId FROM cfg.ReportDefinition
+                          WHERE Code = 'UNMATCHED_CSV');
+DECLARE @exceptions INT = (SELECT ReportDefinitionId FROM cfg.ReportDefinition
+                           WHERE Code = 'EXCEPTIONS_XLSX');
+
+INSERT cfg.ReportColumn
+    (ReportDefinitionId, DatasetFieldId, ComputedField, Header, DisplayFormat,
+     ColumnWidth, Sequence)
+SELECT @unmatched, f.DatasetFieldId, NULL, v.Header, v.Format, v.Width, v.Seq
+FROM (VALUES
+        ('REF_PRIMARY', N'Reference',   NULL,          28, 1),
+        ('AMOUNT',      N'Amount',      N'#,##0.000',  16, 2),
+        ('CURRENCY',    N'Currency',    NULL,           9, 3),
+        ('TX_DATETIME', N'Date',        N'yyyy-mm-dd', 14, 4),
+        ('DIRECTION',   N'Direction',   NULL,          11, 5),
+        ('CRDTR_ACCT',  N'Account',     NULL,          24, 6)
+     ) AS v(Code, Header, Format, Width, Seq)
+JOIN cfg.DatasetField AS f ON f.DatasetId = @left AND f.FieldCode = v.Code;
+
+/* CURRENCY is not matchable, and a report column does not need it to be:
+   a report may show a field the rule builder withholds. */
+INSERT cfg.ReportColumn
+    (ReportDefinitionId, DatasetFieldId, ComputedField, Header, DisplayFormat,
+     ColumnWidth, Sequence)
+VALUES
+    (@unmatched, NULL, 'MatchStatus',       N'Match status', NULL, 14, 7),
+    (@unmatched, NULL, 'StagingId',         N'Staging id',   NULL, 14, 8),
+    (@exceptions, NULL, 'ExceptionCode',    N'Code',         NULL, 20, 1),
+    (@exceptions, NULL, 'MatchStatus',      N'Match status', NULL, 14, 2),
+    (@exceptions, NULL, 'StagingId',        N'Staging id',   NULL, 14, 3),
+    (@exceptions, NULL, 'MatchedByRuleCode', N'Matched by',  NULL, 18, 4);
+GO
+
+PRINT '';
+PRINT 'Portal configuration: 3 access grants, 1 schedule, 2 fee schedules, 3 reports.';
+SELECT (SELECT COUNT(*) FROM cfg.UserCounterpartyAccess) AS Grants,
+       (SELECT COUNT(*) FROM cfg.ScheduleDefinition)      AS Schedules,
+       (SELECT COUNT(*) FROM cfg.FeeSchedule)             AS FeeSchedules,
+       (SELECT COUNT(*) FROM cfg.FeeTier)                 AS FeeTiers,
+       (SELECT COUNT(*) FROM cfg.ReportDefinition)        AS Reports,
+       (SELECT COUNT(*) FROM cfg.ReportColumn)            AS ReportColumns;

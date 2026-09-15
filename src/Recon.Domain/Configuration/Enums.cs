@@ -87,6 +87,16 @@ public enum RunStepName
     Acquire,
     Parse,
     Stage,
+
+    /// <summary>
+    /// Re-opens staged rows a previous run already judged, so that a Rematch
+    /// or a Sandbox replay starts from the same state a fresh load would.
+    /// Without it every statement before pass 1 — exclusions, duplicate
+    /// detection, the passes themselves — filtered on
+    /// <c>MatchStatus = 'Unmatched'</c> and therefore saw nothing.
+    /// </summary>
+    Reset,
+
     Exclude,
     Duplicates,
     Match,

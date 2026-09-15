@@ -182,6 +182,14 @@ public sealed class ReportService(
         var statement = ReportSqlBuilder.Compile(
             report, definition, runId, run[0].StagingRunId, run[0].BusinessDate, from, to);
 
+        // Read BEFORE the reader opens. One connection serves the request, so
+        // a settings query issued while the report's reader was streaming
+        // failed with "there is already an open DataReader associated with
+        // this Connection" — and it failed after the response headers had
+        // gone out, so the browser saw a truncated download rather than an
+        // error.
+        var maxRows = await MaxRowsPerSheetAsync(cancellationToken).ConfigureAwait(false);
+
         using var command = Db.Command(_connection, statement.Sql, timeoutSeconds: 1800);
         foreach (var p in statement.Parameters.Parameters)
         {
@@ -199,8 +207,6 @@ public sealed class ReportService(
         using var reader = await command
             .ExecuteReaderAsync(System.Data.CommandBehavior.SequentialAccess, cancellationToken)
             .ConfigureAwait(false);
-
-        var maxRows = await MaxRowsPerSheetAsync(cancellationToken).ConfigureAwait(false);
 
         return report.OutputFormat == ReportOutputFormat.Csv
             ? await new CsvReportWriter()

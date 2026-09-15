@@ -885,9 +885,19 @@ CREATE TABLE ops.ReconRunStep (
     -- B3 · Each step is a checkpoint; Resume re-executes from the first
     -- non-completed step. Acquire and Parse are idempotent by file hash;
     -- a pass is idempotent by (RunId, MatchRuleId).
+    /* FIX (found by executing a sandbox dry-run): 'Reset' was missing.
+       A Rematch or Sandbox run reads another run's staged rows, and those
+       rows still carry that run's verdict in the MatchStatus cache. Every
+       statement before pass 1 filters on MatchStatus = 'Unmatched', so a
+       replay over already-matched rows excluded nothing, detected no
+       duplicates and matched nothing — while the cached status from the
+       earlier run made the aggregates look like a complete success. The
+       reset step re-opens those rows for the run about to process them,
+       which is what the cache's contract already says: it reflects the most
+       recent run over the rows, and ops.MatchResult is the per-run record. */
     CONSTRAINT CK_RunStep_Name CHECK
 (StepName COLLATE Latin1_General_CS_AS IN
-        ('Acquire','Parse','Stage','Exclude','Duplicates','Match',
+        ('Acquire','Parse','Stage','Reset','Exclude','Duplicates','Match',
          'Classify','AutoClose','ControlTotals','Aggregate','Fees','Report')),
     CONSTRAINT CK_RunStep_Status CHECK
 (Status COLLATE Latin1_General_CS_AS IN

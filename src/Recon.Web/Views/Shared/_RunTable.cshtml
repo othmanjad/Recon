@@ -1,0 +1,87 @@
+@model List<RunRow>
+@*
+    The run list, shared by the dashboard and the Runs screen.
+
+    A superseded run is dimmed rather than hidden: the corrected day is the
+    one that counts, but the run that produced yesterday's number must stay
+    visible or the numbers nobody can reproduce are the ones that were
+    reported.
+*@
+<div class="rc-table-scroll">
+    <table class="table rc-table table-hover align-middle">
+        <thead>
+            <tr>
+                <th>Run</th>
+                <th>Definition</th>
+                <th>Business date</th>
+                <th>Session</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th class="text-end">Left rows</th>
+                <th class="text-end">Right rows</th>
+                <th class="text-end">Matched</th>
+                <th class="text-end">Unmatched</th>
+                <th class="text-end">Ambiguous</th>
+                <th class="text-end">Duration</th>
+                <th>Triggered by</th>
+                <th></th>
+            </tr>
+        </thead>
+        <tbody>
+            @if (Model.Count == 0)
+            {
+                <tr>
+                    <td colspan="14" class="rc-empty">No runs match this filter.</td>
+                </tr>
+            }
+            @foreach (var run in Model)
+            {
+                <tr class="@(run.IsCurrent ? null : "text-muted")">
+                    <td class="rc-mono">
+                        <a asp-controller="Runs" asp-action="Detail" asp-route-id="@run.RunId">@run.RunId</a>
+                        @if (!run.IsCurrent)
+                        {
+                            <span class="badge text-bg-light border" title="Superseded by a later run for the same business date">superseded</span>
+                        }
+                    </td>
+                    <td>
+                        <div>@run.DefinitionCode</div>
+                        <div class="rc-help">@run.DefinitionName</div>
+                    </td>
+                    <td class="rc-mono">@run.BusinessDate.ToString("yyyy-MM-dd")</td>
+                    <td class="rc-mono">@(run.SessionRef ?? "—")</td>
+                    <td>
+                        @Fmt.RunTypeBadge(run.RunType)
+                        @if (run.SourceRunId is { } source)
+                        {
+                            @* Which run's staging this one read. The whole
+                               point of StagingRunId: a rematch reuses rows
+                               rather than duplicating 2M of them. *@
+                            <span class="rc-help d-block" title="Reads run @source's staged rows">
+                                staging @run.StagingRunId
+                            </span>
+                        }
+                    </td>
+                    <td>
+                        @Fmt.StatusBadge(run.Status)
+                        @if (run.ErrorMessage is { Length: > 0 } error)
+                        {
+                            <i class="bi bi-info-circle text-danger" title="@error" aria-label="@error"></i>
+                        }
+                    </td>
+                    <td class="rc-num">@Fmt.Count(run.LeftRowCount)</td>
+                    <td class="rc-num">@Fmt.Count(run.RightRowCount)</td>
+                    <td class="rc-num">@Fmt.Count(run.MatchedCount)</td>
+                    <td class="rc-num @(run.UnmatchedCount > 0 ? "rc-num-neg" : null)">@Fmt.Count(run.UnmatchedCount)</td>
+                    <td class="rc-num @(run.AmbiguousCount > 0 ? "rc-num-neg" : null)">@Fmt.Count(run.AmbiguousCount)</td>
+                    <td class="rc-num">@Fmt.Duration(run.Duration)</td>
+                    <td class="rc-help">@run.TriggeredBy</td>
+                    <td class="text-end">
+                        <a class="btn btn-sm btn-outline-secondary"
+                           asp-controller="Runs" asp-action="Detail" asp-route-id="@run.RunId">Open</a>
+                    </td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>

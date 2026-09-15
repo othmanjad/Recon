@@ -252,6 +252,42 @@ EXEC #expect 'collation', N'MatchStatus = ''matched'' (wrong case)', 'reject',
       VALUES ((SELECT DatasetId FROM cfg.Dataset WHERE Code=''ZZ_LEFT''), 9001,
               ''2026-09-15'', N''E2E-9'', ''matched'');';
 
+/* ---------------------------------------------------------------------
+   The run-step whitelist must name every step the engine runs. 'Reset'
+   was missing, and its absence was found by executing a sandbox dry-run:
+   a replay over another run's staged rows has to re-open them, because
+   everything before pass 1 filters on MatchStatus = 'Unmatched'.
+   --------------------------------------------------------------------- */
+EXEC #expect 'reset', N'run step named ''Reset''', 'accept',
+    N'INSERT ops.ReconRunStep (RunId, StepName, Side, Status)
+      VALUES ((SELECT RunId FROM ops.ReconRun WHERE SessionRef=''ZZS1''),
+              ''Reset'', ''Left'', ''Completed'');';
+
+EXEC #expect 'reset', N'run step named ''reset'' (wrong case)', 'reject',
+    N'INSERT ops.ReconRunStep (RunId, StepName, Side, Status)
+      VALUES ((SELECT RunId FROM ops.ReconRun WHERE SessionRef=''ZZS1''),
+              ''reset'', ''Left'', ''Completed'');';
+
+EXEC #expect 'reset', N'run step named ''Rewind'' (not a step the engine runs)', 'reject',
+    N'INSERT ops.ReconRunStep (RunId, StepName, Side, Status)
+      VALUES ((SELECT RunId FROM ops.ReconRun WHERE SessionRef=''ZZS1''),
+              ''Rewind'', ''Left'', ''Completed'');';
+
+/* One Reset per side, not two. The step identity includes Side, so the
+   same side twice must collide — the property that stopped the right
+   dataset's stages from being silently skipped. */
+EXEC #expect 'reset', N'two Reset steps for the same run and side', 'reject',
+    N'DECLARE @r BIGINT = (SELECT RunId FROM ops.ReconRun WHERE SessionRef=''ZZS1'');
+      INSERT ops.ReconRunStep (RunId, StepName, Side, Status)
+      VALUES (@r, ''Reset'', ''Left'', ''Completed''),
+             (@r, ''Reset'', ''Left'', ''Completed'');';
+
+EXEC #expect 'reset', N'one Reset step per side', 'accept',
+    N'DECLARE @r BIGINT = (SELECT RunId FROM ops.ReconRun WHERE SessionRef=''ZZS1'');
+      INSERT ops.ReconRunStep (RunId, StepName, Side, Status)
+      VALUES (@r, ''Reset'', ''Left'', ''Completed''),
+             (@r, ''Reset'', ''Right'', ''Completed'');';
+
 EXEC #expect 'collation', N'exception Status = ''OPEN'' (wrong case)', 'reject',
     N'INSERT ops.ReconException (RunId, DefinitionId, BusinessDate, Side, ExceptionCode, Status)
       VALUES ((SELECT RunId FROM ops.ReconRun WHERE SessionRef=''ZZS1''),

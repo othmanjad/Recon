@@ -1,0 +1,137 @@
+@{
+    var denied = ViewData["Denied"] is true;
+    var rows = (List<AuditRow>)ViewData["Rows"]!;
+    var types = (List<string>)ViewData["Types"]!;
+    var users = (List<string>)ViewData["Users"]!;
+    var entityType = ViewData["EntityType"] as string;
+    var performedBy = ViewData["PerformedBy"] as string;
+    var take = (int)ViewData["Take"]!;
+}
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+    <h1 class="h4 mb-0">Audit log</h1>
+    <span class="rc-help">append-only by grant, not by convention</span>
+</div>
+
+@if (denied)
+{
+    <div class="alert alert-info" role="alert">
+        <strong>The audit log needs Configure access.</strong>
+        An entry names an entity id rather than a counterparty, so it cannot be filtered by your
+        grants without joining every entity type it can reference — access to it is therefore
+        all-or-nothing.
+    </div>
+}
+else
+{
+    @*
+        No role anywhere has UPDATE or DELETE on the aud schema, so the
+        application this log records cannot rewrite the record.
+    *@
+    <div class="alert alert-light border small">
+        The portal's database role has <code>INSERT</code> and <code>SELECT</code> here and nothing
+        else — no role has <code>UPDATE</code> or <code>DELETE</code> on the <code>aud</code>
+        schema. Exports appear here too: regulators ask who downloaded which report, and an export
+        is logged before a byte is sent, so a download that failed halfway is still recorded as
+        attempted.
+    </div>
+
+    <div class="rc-card mb-3">
+        <div class="rc-card-head"><h2>Filter</h2></div>
+        <div class="p-3">
+            <form method="get" asp-action="Index" class="row g-2 align-items-end">
+                <div class="col-md-3">
+                    <label class="form-label" for="entityType">Entity type</label>
+                    <select class="form-select form-select-sm" id="entityType" name="entityType">
+                        <option value="">Any</option>
+                        @foreach (var type in types)
+                        {
+                            <option value="@type" selected="@(entityType == type)">@type</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label" for="performedBy">Performed by</label>
+                    <select class="form-select form-select-sm" id="performedBy" name="performedBy">
+                        <option value="">Anyone</option>
+                        @foreach (var user in users)
+                        {
+                            <option value="@user" selected="@(performedBy == user)">@user</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label" for="take">Rows</label>
+                    <input class="form-control form-control-sm" type="number" id="take" name="take"
+                           value="@take" min="20" max="2000">
+                </div>
+                <div class="col-md-4 d-flex gap-2">
+                    <button class="btn btn-sm btn-primary" type="submit">Apply</button>
+                    <a class="btn btn-sm btn-outline-secondary" asp-action="Index">Reset</a>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="rc-card">
+        <div class="rc-card-head">
+            <h2>Entries</h2>
+            <span class="rc-help">@rows.Count shown, newest first</span>
+        </div>
+        <div class="rc-table-scroll">
+            <table class="table rc-table align-middle">
+                <thead>
+                    <tr>
+                        <th>Id</th><th>When</th><th>Who</th><th>Action</th>
+                        <th>Entity</th><th>Before → after</th><th>From</th><th>Notes</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (rows.Count == 0)
+                    {
+                        <tr><td colspan="8" class="rc-empty">Nothing matches this filter.</td></tr>
+                    }
+                    @foreach (var row in rows)
+                    {
+                        <tr>
+                            <td class="rc-mono">@row.AuditId</td>
+                            <td class="rc-mono">@row.PerformedAt.ToString("yyyy-MM-dd HH:mm:ss")</td>
+                            <td>@row.PerformedBy</td>
+                            <td>
+                                @{
+                                    var tone = row.Action switch
+                                    {
+                                        "Delete" or "Deactivate" => "danger",
+                                        "Create" or "Activate" => "success",
+                                        "Execute" or "Resume" => "primary",
+                                        "Export" => "info",
+                                        _ => "light",
+                                    };
+                                }
+                                <span class="badge text-bg-@tone @(tone == "light" ? "border" : null)">
+                                    @row.Action
+                                </span>
+                            </td>
+                            <td class="rc-mono">@row.EntityType <span class="rc-help">@row.EntityId</span></td>
+                            <td style="max-width:420px">
+                                @if (row.OldValueJson is { Length: > 0 } before)
+                                {
+                                    <div class="rc-mono rc-help text-truncate" title="@before">− @before</div>
+                                }
+                                @if (row.NewValueJson is { Length: > 0 } after)
+                                {
+                                    <div class="rc-mono text-truncate" title="@after">+ @after</div>
+                                }
+                                @if (row.OldValueJson is null && row.NewValueJson is null)
+                                {
+                                    <span class="rc-help">—</span>
+                                }
+                            </td>
+                            <td class="rc-help rc-mono">@(row.IpAddress ?? "—")</td>
+                            <td class="rc-help">@(row.Notes ?? "")</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}

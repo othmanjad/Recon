@@ -12,6 +12,69 @@ namespace Recon.Engine.Sql;
 public static class SqlQueryBuilderLifecycle
 {
     /// <summary>
+    /// Re-opens the staged rows a previous run already judged.
+    ///
+    /// <para>
+    /// Only a run that reads another run's rows needs this — a Rematch or a
+    /// Sandbox dry-run. Those rows carry the source run's verdict in
+    /// staging's four cache columns, and every statement before pass 1
+    /// filters on <c>MatchStatus = 'Unmatched'</c>: without the reset, a
+    /// replay excluded nothing, found no duplicates and matched nothing,
+    /// while the stale cache made the run's aggregates look like a complete
+    /// success. A dry-run reporting a perfect match rate for rules that
+    /// matched nothing is worse than no dry-run at all.
+    /// </para>
+    ///
+    /// <para>
+    /// This does not lose the earlier run's results. <c>ops.MatchResult</c>
+    /// is partitioned per run and never rewritten, and
+    /// <c>ops.RunAggregate</c> holds that run's totals; staging's cache is
+    /// explicitly the most recent run's, which after this is ours.
+    /// </para>
+    ///
+    /// <para>
+    /// The predicate touches only rows that actually carry a verdict, so a
+    /// replay over a freshly staged day writes nothing.
+    /// </para>
+    /// </summary>
+    public static CompiledStatement CompileWorkingSetReset(
+        Dataset dataset,
+        long runId,
+        long stagingRunId,
+        DateOnly windowFrom,
+        DateOnly windowTo)
+    {
+        ArgumentNullException.ThrowIfNull(dataset);
+
+        var p = new SqlParameterBag();
+        var sql = new StringBuilder();
+
+        var range = SqlQueryBuilder.StagingRange("S", dataset.DatasetId, stagingRunId,
+            windowFrom, windowTo, p);
+
+        var run = p.Add("@RunId", runId);
+
+        sql.AppendLine("SET NOCOUNT ON;");
+        sql.AppendLine();
+        sql.AppendLine("UPDATE S");
+        sql.AppendLine("SET MatchStatus = 'Unmatched',");
+        sql.AppendLine("    ExceptionCode = NULL,");
+        sql.AppendLine("    MatchedWithId = NULL,");
+        sql.AppendLine("    MatchedByRuleId = NULL,");
+        sql.AppendLine(CultureInfo.InvariantCulture, $"    ResultRunId = {run}");
+        sql.AppendLine("FROM stg.StagingTransaction AS S");
+        sql.AppendLine("WHERE " + range);
+        sql.AppendLine("  AND (S.MatchStatus <> 'Unmatched'");
+        sql.AppendLine("       OR S.ExceptionCode IS NOT NULL");
+        sql.AppendLine("       OR S.MatchedWithId IS NOT NULL");
+        sql.AppendLine("       OR S.MatchedByRuleId IS NOT NULL);");
+        sql.AppendLine();
+        sql.AppendLine("SELECT CAST(@@ROWCOUNT AS BIGINT) AS Reopened_;");
+
+        return new CompiledStatement(sql.ToString(), p);
+    }
+
+    /// <summary>
     /// Rows that must never match leave the working set before pass 1 and are
     /// reported separately (finding C6). They never generate exceptions: a
     /// rejected transaction is not a break.

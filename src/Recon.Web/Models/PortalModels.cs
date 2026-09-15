@@ -172,8 +172,14 @@ public sealed record SettingRow
     /// flagged in the UI. `ResultsMonthsOnline` is the one that matters: the
     /// regulatory retention period is an open question, and 84 months is a
     /// guess sitting in a column.
+    ///
+    /// The marker is looked for anywhere in the description, not at the start:
+    /// the seeded text puts the sentence explaining the value first and the
+    /// "OPEN:" caveat after it, so a StartsWith test found nothing and the
+    /// flag never appeared.
     /// </summary>
-    public bool IsOpenQuestion => Description.StartsWith("OPEN", StringComparison.Ordinal);
+    public bool IsOpenQuestion => Description.Contains("OPEN:", StringComparison.Ordinal)
+        || Description.Contains("STILL OPEN", StringComparison.Ordinal);
 }
 
 public sealed record AuditRow

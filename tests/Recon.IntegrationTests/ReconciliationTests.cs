@@ -320,6 +320,37 @@ public sealed class ReconciliationTests(SqlServerFixture sql)
         // It found the rows: the whole point.
         Assert.Equal(1, rematchOutcome.Counts.LeftRows);
 
+        // And it MATCHED them. This is the assertion whose absence hid a real
+        // defect: the rows still carried the first run's 'Matched' status in
+        // staging's cache, every statement before pass 1 filters on
+        // 'Unmatched', so the replay's passes saw nothing — while the stale
+        // cache made the aggregates report a perfect run. A rematch that
+        // matches nothing must not look like a rematch that matched
+        // everything.
+        Assert.Equal(2, rematchOutcome.Counts.Matched);
+        Assert.Equal(1, rematchOutcome.Passes.Sum(pass => pass.Matched));
+        Assert.True(await CountResultsAsync(connection, rematch.RunId).ConfigureAwait(false) > 0,
+            "the rematch wrote no MatchResult rows of its own");
+
+        // The reset ran once per side and is visible as a step, so an
+        // operator can see that this run re-opened those rows.
+        var resetSides = await Db.QueryAsync(connection,
+            """
+            SELECT Side FROM ops.ReconRunStep
+            WHERE RunId = @run AND StepName = 'Reset' ORDER BY Side;
+            """,
+            r => r.GetString(0),
+            c => c.With("@run", rematch.RunId)).ConfigureAwait(false);
+
+        Assert.Equal(["Left", "Right"], resetSides);
+
+        // The FIRST run recorded no reset: it staged its own rows, so there
+        // was nothing to re-open and the update would have been pure cost.
+        Assert.Empty(await Db.QueryAsync(connection,
+            "SELECT Side FROM ops.ReconRunStep WHERE RunId = @run AND StepName = 'Reset';",
+            r => r.GetString(0),
+            c => c.With("@run", first.RunId)).ConfigureAwait(false));
+
         // And the first run's results are still there, unmodified. "Re-runs
         // never overwrite" is true at the level that matters.
         Assert.Equal(firstResults, await CountResultsAsync(connection, first.RunId).ConfigureAwait(false));

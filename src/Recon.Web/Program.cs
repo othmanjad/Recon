@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.Data.SqlClient;
+using Recon.Web.Filters;
 using Recon.Web.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -11,7 +12,20 @@ var builder = WebApplication.CreateBuilder(args);
 // inside a bank's network must not depend on an outbound request to a
 // third party to render its own page (design §13.1).
 // ---------------------------------------------------------------------
-builder.Services.AddControllersWithViews();
+builder.Services.AddControllersWithViews(options =>
+{
+    // AccessService.RequireAsync throws rather than returning false, so that
+    // a call site which carried on cannot write data the user may not write.
+    // This turns those refusals into a page, once, instead of a try/catch
+    // around every action.
+    options.Filters.Add<AccessDeniedFilter>();
+});
+
+// The audit log records the caller's IP, and the access checks read the
+// current user outside a controller. Both take IHttpContextAccessor as an
+// optional dependency — without it registered they silently record nothing,
+// which is the failure mode an audit log must not have.
+builder.Services.AddHttpContextAccessor();
 
 // A scoped connection per request. Each request is one unit of work, and
 // the engine's repositories take a connection rather than a factory so

@@ -1,0 +1,178 @@
+@using Recon.Web.Controllers
+@model List<SettingRow>
+@{
+    var canConfigure = ViewData["CanConfigure"] is true;
+    var currencies = (List<CurrencyRow>)ViewData["Currencies"]!;
+    var slots = (List<SlotSummaryRow>)ViewData["Slots"]!;
+    var open = Model.Count(s => s.IsOpenQuestion);
+}
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+    <h1 class="h4 mb-0">Platform settings</h1>
+    <span class="rc-help">@Model.Count setting(s)@(open > 0 ? $" · {open} still an open question" : "")</span>
+</div>
+
+@if (open > 0)
+{
+    @*
+        A placeholder standing in for a decision, flagged as such. The
+        retention period is the one that matters: 84 months is a seven-year
+        guess sitting in a column.
+    *@
+    <div class="alert alert-warning" role="alert">
+        <strong>@open setting(s) hold a placeholder rather than a decision.</strong>
+        They are marked below. Confirming them is a question for the business, not a value to
+        invent here.
+    </div>
+}
+
+<div class="rc-card mb-3">
+    <div class="rc-card-head">
+        <h2>Settings</h2>
+        <span class="rc-help">read by the engine, the scheduler and the writers at run time</span>
+    </div>
+    <div class="rc-table-scroll">
+        <table class="table rc-table align-middle">
+            <thead>
+                <tr>
+                    <th>Key</th><th>Type</th><th style="width:220px">Value</th>
+                    <th>What it controls</th><th>Last changed</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var setting in Model)
+                {
+                    <tr class="@(setting.IsOpenQuestion ? "rc-warn-nonsargable" : null)">
+                        <td class="rc-mono">@setting.Key</td>
+                        <td class="rc-help">@setting.DataType</td>
+                        <td>
+                            @if (canConfigure)
+                            {
+                                <form asp-action="Save" method="post" class="d-flex gap-1">
+                                    <input type="hidden" name="settingKey" value="@setting.Key">
+                                    @if (setting.DataType == "Bool")
+                                    {
+                                        <select class="form-select form-select-sm" name="settingValue"
+                                                aria-label="@setting.Key">
+                                            <option value="true" selected="@(setting.Value == "true")">true</option>
+                                            <option value="false" selected="@(setting.Value == "false")">false</option>
+                                        </select>
+                                    }
+                                    else
+                                    {
+                                        <input class="form-control form-control-sm rc-mono" name="settingValue"
+                                               value="@setting.Value" aria-label="@setting.Key">
+                                    }
+                                    <button class="btn btn-sm btn-outline-primary" type="submit">Set</button>
+                                </form>
+                            }
+                            else
+                            {
+                                <span class="rc-mono">@setting.Value</span>
+                            }
+                        </td>
+                        <td class="small">
+                            @setting.Description
+                            @if (setting.IsOpenQuestion)
+                            {
+                                <span class="badge text-bg-warning">open question</span>
+                            }
+                        </td>
+                        <td class="rc-help rc-mono">
+                            @setting.ModifiedAt.ToString("yyyy-MM-dd HH:mm")
+                            <div>@(setting.ModifiedBy ?? "seed")</div>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+    @if (!canConfigure)
+    {
+        <div class="p-3 border-top rc-help">
+            Changing a setting needs <strong>Configure</strong> access. The values are shown because
+            knowing what the platform is configured to do is not the same as being able to change
+            it.
+        </div>
+    }
+    else
+    {
+        <div class="p-3 border-top rc-help">
+            Values are validated against the declared type before the write. The column is text for
+            all four types, so <code>abc</code> in an <code>Int</code> setting would store happily
+            and then fail inside the scheduler's parse — where it would fall back to a default and
+            look like nothing happened.
+        </div>
+    }
+</div>
+
+<div class="row g-3">
+    <div class="col-lg-6">
+        <div class="rc-card h-100">
+            <div class="rc-card-head">
+                <h2>Currencies</h2>
+                <span class="rc-help">minor units drive every integer amount</span>
+            </div>
+            <div class="rc-table-scroll">
+                <table class="table rc-table align-middle">
+                    <thead>
+                        <tr><th>Code</th><th>Name</th><th class="text-end">Minor units</th><th>1 unit is</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var currency in currencies)
+                        {
+                            <tr>
+                                <td class="rc-mono">@currency.Code</td>
+                                <td>@currency.Name</td>
+                                <td class="rc-num">@currency.MinorUnits</td>
+                                <td class="rc-mono">
+                                    @MinorUnits.Format((long)Math.Pow(10, currency.MinorUnits), currency.MinorUnits)
+                                    = @((long)Math.Pow(10, currency.MinorUnits))
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <div class="p-3 border-top rc-help">
+                Hard-coding three decimal places was a real finding: JOD has three minor units and
+                USD has two, so a fee schedule in one currency read with the other's scale is wrong
+                by a factor of ten. Amounts are integers everywhere — never a float or a double.
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-6">
+        <div class="rc-card h-100">
+            <div class="rc-card-head">
+                <h2>Storage slots</h2>
+                <span class="rc-help">what a dataset's fields can be mapped to</span>
+            </div>
+            <div class="rc-table-scroll">
+                <table class="table rc-table align-middle">
+                    <thead>
+                        <tr>
+                            <th>Type</th><th class="text-end">Total</th>
+                            <th class="text-end">Reservable</th>
+                            <th class="text-end">Companion pool</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var slot in slots)
+                        {
+                            <tr>
+                                <td>@slot.SlotType</td>
+                                <td class="rc-num">@slot.Total</td>
+                                <td class="rc-num">@(slot.Total - slot.NormalizedOnly)</td>
+                                <td class="rc-num">@slot.NormalizedOnly</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <div class="p-3 border-top rc-help">
+                The two text pools are separate and the database enforces the split: a mapped field
+                takes a reservable slot, a normalization companion takes one from the companion pool.
+                Before that split, a companion could silently overwrite a mapped field.
+            </div>
+        </div>
+    </div>
+</div>

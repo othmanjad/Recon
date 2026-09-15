@@ -1,0 +1,411 @@
+@using Recon.Web.Controllers
+@{
+    var counterparties = (List<CounterpartyRow>)ViewData["Counterparties"]!;
+    var selected = ViewData["Selected"] as CounterpartyRow;
+    var definitions = (List<DefinitionRow>)ViewData["Definitions"]!;
+    var datasets = (List<DatasetRow>)ViewData["Datasets"]!;
+    var grants = ViewData["Grants"] as List<GrantRow>;
+    var myGrants = (Dictionary<int, AccessLevel>)ViewData["MyGrants"]!;
+    var canConfigure = selected is not null
+        && myGrants.TryGetValue(selected.CounterpartyId, out var myLevel)
+        && myLevel >= AccessLevel.Configure;
+}
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+    <h1 class="h4 mb-0">Counterparties</h1>
+    <form method="get" asp-action="Index" class="d-flex gap-2 rc-picker">
+        <select class="form-select form-select-sm" name="id" style="width:auto" aria-label="Counterparty">
+            @foreach (var row in counterparties)
+            {
+                <option value="@row.CounterpartyId" selected="@(selected?.CounterpartyId == row.CounterpartyId)">
+                    @row.Code — @row.Name
+                </option>
+            }
+        </select>
+        <button class="btn btn-sm btn-primary" type="submit">Open</button>
+    </form>
+</div>
+
+@*
+    The counterparty is the unit access is scoped to (design §13), which is
+    why grants live on this screen and not in a separate admin corner.
+*@
+<div class="alert alert-light border small">
+    <strong>A counterparty is the scope of access.</strong> Every read in the portal is filtered by
+    your grants in SQL, not after the fact — a screen that fetched everything and hid rows would
+    still have leaked them through counts and totals. CliQ is one configured counterparty here, not
+    the product.
+</div>
+
+<div class="rc-card mb-3">
+    <div class="rc-card-head">
+        <h2>All counterparties you can see</h2>
+        <span class="rc-help">@counterparties.Count of them</span>
+    </div>
+    <div class="rc-table-scroll">
+        <table class="table rc-table table-hover align-middle">
+            <thead>
+                <tr>
+                    <th>Code</th><th>Name</th><th>Your access</th>
+                    <th class="text-end">Datasets</th>
+                    <th class="text-end">Definitions</th>
+                    <th class="text-end">Fee schedules</th>
+                    <th>Status</th><th></th>
+                </tr>
+            </thead>
+            <tbody>
+                @if (counterparties.Count == 0)
+                {
+                    <tr>
+                        <td colspan="8" class="rc-empty">
+                            You hold no counterparty grants, so there is nothing here — by rule,
+                            not because the platform is empty.
+                        </td>
+                    </tr>
+                }
+                @foreach (var row in counterparties)
+                {
+                    <tr class="@(selected?.CounterpartyId == row.CounterpartyId ? "table-active" : null)">
+                        <td class="rc-mono">@row.Code</td>
+                        <td>
+                            <div>@row.Name</div>
+                            @if (row.Description is { Length: > 0 } description)
+                            {
+                                <div class="rc-help">@description</div>
+                            }
+                        </td>
+                        <td>
+                            @if (row.AccessLevel is { } level)
+                            {
+                                <span class="badge text-bg-primary">@level</span>
+                            }
+                            else
+                            {
+                                <span class="rc-help">—</span>
+                            }
+                        </td>
+                        <td class="rc-num">@row.DatasetCount</td>
+                        <td class="rc-num">@row.DefinitionCount</td>
+                        <td class="rc-num">@row.FeeScheduleCount</td>
+                        <td>
+                            @if (row.IsActive)
+                            {
+                                <span class="badge text-bg-success">Active</span>
+                            }
+                            else
+                            {
+                                <span class="badge text-bg-secondary">Inactive</span>
+                            }
+                        </td>
+                        <td class="text-end">
+                            <a class="btn btn-sm btn-outline-secondary"
+                               asp-action="Index" asp-route-id="@row.CounterpartyId">Open</a>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="row g-3">
+    <div class="col-xl-6">
+        <div class="rc-card mb-3">
+            <div class="rc-card-head">
+                <h2>@(selected is null ? "Add a counterparty" : "Edit " + selected.Code)</h2>
+                @if (selected is not null)
+                {
+                    <a class="btn btn-sm btn-outline-secondary" asp-action="Index">New</a>
+                }
+            </div>
+            <div class="p-3">
+                <form asp-action="SaveCounterparty" method="post" class="row g-3">
+                    @if (selected is not null)
+                    {
+                        <input type="hidden" name="counterpartyId" value="@selected.CounterpartyId">
+                    }
+                    <div class="col-md-4">
+                        <label class="form-label" for="code">Code</label>
+                        <input class="form-control" id="code" name="code" required
+                               value="@selected?.Code" placeholder="JOPACC">
+                    </div>
+                    <div class="col-md-8">
+                        <label class="form-label" for="name">Name</label>
+                        <input class="form-control" id="name" name="name" required
+                               value="@selected?.Name" placeholder="Jordan Payments and Clearing Company">
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label" for="description">Description</label>
+                        <input class="form-control" id="description" name="description"
+                               value="@selected?.Description">
+                    </div>
+                    <div class="col-12">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="isActive" name="isActive"
+                                   value="true" checked="@(selected?.IsActive ?? true)">
+                            <input type="hidden" name="isActive" value="false">
+                            <label class="form-check-label" for="isActive">Active</label>
+                        </div>
+                    </div>
+                    <div class="col-12">
+                        <button class="btn btn-primary" type="submit">Save</button>
+                        @if (selected is null)
+                        {
+                            <span class="rc-help ms-2">
+                                Creating one grants you Configure access to it — otherwise you could
+                                not see what you had just made.
+                            </span>
+                        }
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        @if (selected is not null)
+        {
+            <div class="rc-card">
+                <div class="rc-card-head">
+                    <h2>Who can see @selected.Code</h2>
+                    <span class="rc-help">scoped per counterparty</span>
+                </div>
+                <div class="p-3">
+                    @if (grants is null)
+                    {
+                        <div class="rc-help">
+                            Listing the grants needs <strong>Configure</strong> access to this
+                            counterparty: who else can see a partner is itself information about
+                            that partner's operations.
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="rc-table-scroll mb-3">
+                            <table class="table rc-table align-middle">
+                                <thead>
+                                    <tr><th>User</th><th>Level</th><th>Granted</th><th>By</th><th></th></tr>
+                                </thead>
+                                <tbody>
+                                    @if (grants.Count == 0)
+                                    {
+                                        <tr><td colspan="5" class="rc-empty">Nobody has access.</td></tr>
+                                    }
+                                    @foreach (var grant in grants)
+                                    {
+                                        <tr>
+                                            <td>@grant.UserName</td>
+                                            <td><span class="badge text-bg-primary">@grant.Level</span></td>
+                                            <td class="rc-mono">@grant.GrantedAt.ToString("yyyy-MM-dd HH:mm")</td>
+                                            <td class="rc-help">@grant.GrantedBy</td>
+                                            <td class="text-end">
+                                                <form asp-action="Revoke" method="post" class="m-0">
+                                                    <input type="hidden" name="counterpartyId" value="@selected.CounterpartyId">
+                                                    <input type="hidden" name="userName" value="@grant.UserName">
+                                                    <button class="btn btn-sm btn-outline-danger" type="submit"
+                                                            data-rc-confirm="Revoke @grant.Level access for @grant.UserName?">
+                                                        Revoke
+                                                    </button>
+                                                </form>
+                                            </td>
+                                        </tr>
+                                    }
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <form asp-action="Grant" method="post" class="row g-2 align-items-end">
+                            <input type="hidden" name="counterpartyId" value="@selected.CounterpartyId">
+                            <div class="col-md-6">
+                                <label class="form-label" for="userName2">User</label>
+                                <input class="form-control form-control-sm" id="userName2" name="userName"
+                                       required placeholder="ops.hala">
+                            </div>
+                            <div class="col-md-3">
+                                <label class="form-label" for="level">Level</label>
+                                <select class="form-select form-select-sm" id="level" name="level">
+                                    <option value="Read">Read</option>
+                                    <option value="Operate" selected>Operate</option>
+                                    <option value="Configure">Configure</option>
+                                </select>
+                            </div>
+                            <div class="col-md-3">
+                                <button class="btn btn-sm btn-primary w-100" type="submit">Grant</button>
+                            </div>
+                            <div class="col-12 rc-help">
+                                Read sees; Operate triggers runs and works exceptions; Configure edits
+                                datasets, rules, fees and grants. Re-granting an existing user changes
+                                their level.
+                            </div>
+                        </form>
+                    }
+                </div>
+            </div>
+        }
+    </div>
+
+    <div class="col-xl-6">
+        @if (selected is not null)
+        {
+            <div class="rc-card mb-3">
+                <div class="rc-card-head">
+                    <h2>Reconciliation definitions</h2>
+                    <span class="rc-help">dataset ↔ dataset</span>
+                </div>
+                <div class="rc-table-scroll">
+                    <table class="table rc-table align-middle">
+                        <thead>
+                            <tr>
+                                <th>Code</th><th>Left ↔ Right</th><th class="text-end">Window</th>
+                                <th class="text-end">Passes</th><th>Status</th><th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (definitions.Count == 0)
+                            {
+                                <tr><td colspan="6" class="rc-empty">No definitions yet.</td></tr>
+                            }
+                            @foreach (var definition in definitions)
+                            {
+                                <tr>
+                                    <td>
+                                        <div class="rc-mono">@definition.Code</div>
+                                        <div class="rc-help">@definition.Name</div>
+                                    </td>
+                                    <td class="rc-mono">
+                                        @definition.LeftDatasetCode ↔ @definition.RightDatasetCode
+                                    </td>
+                                    <td class="rc-num">−@definition.WindowBefore / +@definition.WindowAfter d</td>
+                                    <td class="rc-num">@definition.ActivePasses</td>
+                                    <td>
+                                        @if (definition.IsActive)
+                                        {
+                                            <span class="badge text-bg-success">Active</span>
+                                        }
+                                        else
+                                        {
+                                            <span class="badge text-bg-secondary">Inactive</span>
+                                        }
+                                    </td>
+                                    <td class="text-end">
+                                        <div class="d-flex gap-1 justify-content-end">
+                                            <a class="btn btn-sm btn-outline-secondary"
+                                               asp-controller="Rules" asp-action="Index"
+                                               asp-route-id="@definition.DefinitionId">Rules</a>
+                                            @if (canConfigure)
+                                            {
+                                                <form asp-action="ActivateDefinition" method="post" class="m-0">
+                                                    <input type="hidden" name="counterpartyId" value="@selected.CounterpartyId">
+                                                    <input type="hidden" name="definitionId" value="@definition.DefinitionId">
+                                                    <input type="hidden" name="active" value="@(!definition.IsActive)">
+                                                    <button class="btn btn-sm @(definition.IsActive ? "btn-outline-secondary" : "btn-outline-primary")"
+                                                            type="submit">
+                                                        @(definition.IsActive ? "Deactivate" : "Activate")
+                                                    </button>
+                                                </form>
+                                            }
+                                        </div>
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            @if (canConfigure)
+            {
+                <div class="rc-card">
+                    <div class="rc-card-head"><h2>Add or edit a definition</h2></div>
+                    <div class="p-3">
+                        @if (datasets.Count < 2)
+                        {
+                            <div class="rc-help">
+                                A definition needs two datasets of this counterparty. Define them on
+                                the <a asp-controller="Datasets" asp-action="Index">Datasets</a>
+                                screen first.
+                            </div>
+                        }
+                        else
+                        {
+                            <form asp-action="SaveDefinition" method="post" class="row g-3">
+                                <input type="hidden" name="counterpartyId" value="@selected.CounterpartyId">
+                                <div class="col-md-6">
+                                    <label class="form-label" for="definitionId">Editing</label>
+                                    <select class="form-select" id="definitionId" name="definitionId"
+                                            data-rc-definitions>
+                                        <option value="">(new definition)</option>
+                                        @foreach (var definition in definitions)
+                                        {
+                                            <option value="@definition.DefinitionId"
+                                                    data-code="@definition.Code"
+                                                    data-name="@definition.Name"
+                                                    data-left="@definition.LeftDatasetCode"
+                                                    data-right="@definition.RightDatasetCode"
+                                                    data-before="@definition.WindowBefore"
+                                                    data-after="@definition.WindowAfter">
+                                                @definition.Code
+                                            </option>
+                                        }
+                                    </select>
+                                    <div class="form-text">
+                                        Saving an existing definition increments its version, so the
+                                        snapshot stored with each past run still describes what ran.
+                                    </div>
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label" for="defCode">Code</label>
+                                    <input class="form-control" id="defCode" name="code" required>
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="form-label" for="defName">Name</label>
+                                    <input class="form-control" id="defName" name="name" required>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label" for="leftDatasetId">Left dataset</label>
+                                    <select class="form-select" id="leftDatasetId" name="leftDatasetId" required>
+                                        @foreach (var dataset in datasets)
+                                        {
+                                            <option value="@dataset.DatasetId" data-code="@dataset.Code">
+                                                @dataset.Code — @dataset.Name
+                                            </option>
+                                        }
+                                    </select>
+                                </div>
+                                <div class="col-md-4">
+                                    <label class="form-label" for="rightDatasetId">Right dataset</label>
+                                    <select class="form-select" id="rightDatasetId" name="rightDatasetId" required>
+                                        @foreach (var dataset in datasets)
+                                        {
+                                            <option value="@dataset.DatasetId" data-code="@dataset.Code">
+                                                @dataset.Code — @dataset.Name
+                                            </option>
+                                        }
+                                    </select>
+                                </div>
+                                <div class="col-md-2">
+                                    <label class="form-label" for="windowBefore">Days before</label>
+                                    <input class="form-control" type="number" min="0" id="windowBefore"
+                                           name="windowBefore" value="1" required>
+                                </div>
+                                <div class="col-md-2">
+                                    <label class="form-label" for="windowAfter">Days after</label>
+                                    <input class="form-control" type="number" min="0" id="windowAfter"
+                                           name="windowAfter" value="1" required>
+                                </div>
+                                <div class="col-12">
+                                    <button class="btn btn-primary" type="submit">Save definition</button>
+                                    <span class="rc-help ms-2">
+                                        A window of zero on both sides drops every transaction that
+                                        crossed midnight.
+                                    </span>
+                                </div>
+                            </form>
+                        }
+                    </div>
+                </div>
+            }
+        }
+    </div>
+</div>
+
+@section Scripts {
+    <script src="~/js/counterparties.js"></script>
+}

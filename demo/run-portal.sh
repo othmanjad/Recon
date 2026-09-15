@@ -4,6 +4,10 @@
 #
 #   ./demo/run-portal.sh                 # foreground, Ctrl-C to stop
 #   ./demo/run-portal.sh --background    # detached, prints the URL
+#   ./demo/run-portal.sh --fresh         # detached, with NO database at all,
+#                                        # so the portal's own setup screen
+#                                        # creates one — what a new machine
+#                                        # actually looks like
 #   ./demo/run-portal.sh --stop          # stop a detached one
 #
 # Expects ./demo/run-demo.sh to have run first: the portal shows what a
@@ -44,6 +48,22 @@ mkdir -p "$CACHE"
 DETACH=()
 [ "${1:-}" = "--background" ] && DETACH=(-d)
 
+# --fresh starts the portal with no connection string and a throwaway
+# settings directory, which is the state a newly installed portal is in: it
+# has to be pointed at a server and asked to build its own database. The
+# settings file is written into a mounted directory rather than the
+# repository, so a fresh run is genuinely fresh.
+FRESH=0
+CONFIG_ARGS=()
+if [ "${1:-}" = "--fresh" ]; then
+    FRESH=1
+    DETACH=(-d)
+    CONFIG_DIR="${RECON_PORTAL_CONFIG_DIR:-$(mktemp -d)}"
+    rm -f "$CONFIG_DIR/recon.settings.json"
+    CONFIG_ARGS+=(-v "$CONFIG_DIR:/recon-config" -e "RECON_CONFIG_DIR=/recon-config")
+    CONN=""
+fi
+
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 
 # The proxy and CA bundle are passed through for the same reason build.sh
@@ -60,12 +80,18 @@ if [ -f /root/.ccr/ca-bundle.crt ]; then
 fi
 
 if [ "${#DETACH[@]}" -gt 0 ]; then
-    echo "starting the portal on http://127.0.0.1:$PORT against [$DB]"
+    if [ "$FRESH" -eq 1 ]; then
+        echo "starting the portal on http://127.0.0.1:$PORT with NO database"
+        echo "  settings will be written to $CONFIG_DIR"
+    else
+        echo "starting the portal on http://127.0.0.1:$PORT against [$DB]"
+    fi
 fi
 
 docker run --rm "${DETACH[@]+"${DETACH[@]}"}" --name "$NAME" --network host \
     -v "$ROOT:/src" -v "$CACHE:/nuget" \
     "${PROXY_ARGS[@]+"${PROXY_ARGS[@]}"}" "${CA_ARGS[@]+"${CA_ARGS[@]}"}" \
+    "${CONFIG_ARGS[@]+"${CONFIG_ARGS[@]}"}" \
     -e NUGET_PACKAGES=/nuget \
     -e DOTNET_CLI_TELEMETRY_OPTOUT=1 -e DOTNET_NOLOGO=1 \
     -e "ConnectionStrings__Recon=$CONN" \
@@ -80,7 +106,11 @@ if [ "${#DETACH[@]}" -gt 0 ]; then
         if curl -fsS --noproxy 127.0.0.1 "http://127.0.0.1:$PORT/account/signin" >/dev/null 2>&1; then
             printf ' ready\n'
             echo
-            echo "  http://127.0.0.1:$PORT   sign in as cfg.omar, ops.hala or read.sami"
+            if [ "$FRESH" -eq 1 ]; then
+                echo "  http://127.0.0.1:$PORT   sign in, then the setup screen builds the database"
+            else
+                echo "  http://127.0.0.1:$PORT   sign in as cfg.omar, ops.hala or read.sami"
+            fi
             echo "  ./demo/run-portal.sh --stop   when you are done"
             exit 0
         fi

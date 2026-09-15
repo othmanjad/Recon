@@ -5,10 +5,37 @@ the client side is Bootstrap 5 and jQuery, vendored into `wwwroot/vendor` and
 served from there, because a reconciliation portal inside a bank's network must
 not depend on an outbound request to a third party to render its own page.
 
+## Running it on your own machine
+
+Nothing to prepare but a SQL Server the portal can reach — it builds its own
+database:
+
 ```bash
-./demo/run-demo.sh                  # build the database and reconcile a session
+dotnet run --project src/Recon.Web
+#   http://localhost:5000 (or whatever it prints)
+```
+
+Sign in with any name, and the portal sends you to **/setup** because it has no
+database yet. Type the server, press *Test connection*, press *Save*, then
+*Create the database and install*. That runs `CREATE DATABASE` and the four
+schema scripts — the same files `db/tests/run.sh` runs — and records each one
+with the hash of its text, so the button is safe to press twice. *Load the demo
+configuration* then gives you a complete worked reconciliation to look at, and
+grants you access to it.
+
+The connection string is stored in `recon.settings.json` beside the
+application (`RECON_CONFIG_DIR` moves it). A deployment that keeps its secrets
+elsewhere sets `ConnectionStrings:Recon` instead, and that value wins and is
+never overwritten — the setup screen then shows it read-only rather than
+offering to change something it cannot.
+
+With Docker and no .NET installed, the same thing through containers:
+
+```bash
+./demo/run-demo.sh                  # build a database and reconcile a session
 ./demo/run-portal.sh --background   # serve the portal against it
-#   http://127.0.0.1:5080  — sign in as cfg.omar, ops.hala or read.sami
+#   sign in as cfg.omar, ops.hala or read.sami
+./demo/run-portal.sh --fresh        # ...or with NO database, to walk the setup
 ./demo/run-portal.sh --stop
 ```
 
@@ -50,6 +77,7 @@ boundary.
 | `/schedules` | Cron schedules and alert policies, with the next fire times in both zones |
 | `/settings` | `cfg.PlatformSetting`, validated against each setting's declared type |
 | `/audit` | `aud.AuditLog`. Read-only **by grant**: no role anywhere has `UPDATE` or `DELETE` on that schema |
+| `/setup` | Where the database is, and the schema installer. The only screen that answers on a portal which has none yet |
 
 ## Access levels
 
@@ -73,6 +101,31 @@ nobody and only names the operator, so that the audit log has a subject and the
 access checks have someone to check. A deployment replaces it with the bank's
 identity provider — the authorization logic reads claims and does not care
 where they came from.
+
+## Everything is a screen
+
+There is no step in operating this platform that needs a shell.
+
+| Was a script or a config file | Now |
+|---|---|
+| Editing `appsettings.json` and restarting | `/setup` — server, database, credentials, file storage, tested before saving |
+| `sqlcmd -i db/01-schema.sql` × 4 | *Create the database and install*, with a ledger of what has been applied and what has changed since |
+| `demo/01-demo-config.sql` by hand | *Load the demo configuration* |
+| The first grant, inserted by hand | *Grant me access to unadministered counterparties* — it only ever fills a vacancy, so it cannot be used to get into a counterparty somebody already administers |
+| `recon run --left-file … --right-file …` | **Upload a session and reconcile it** on `/runs`: two files in, a reconciled run out |
+| `Recon:Scheduler:Enabled` + a restart | *Stop the scheduler* on `/schedules`, effective within a minute |
+| Waiting for the nightly tick | *Run housekeeping and alert checks now* — the same methods the tick calls |
+
+The upload path writes each file to the storage root with its SHA-256 and
+parses it from there. The original stays on disk as the byte-identical record
+the design requires; the database keeps the path and the hash, never the bytes
+— at two million rows a day the blob path is how a database becomes
+unmanageable.
+
+The staging itself is `Recon.Engine.Staging.FileStager`, which the CLI and the
+scheduler also call. That class exists because the pipeline had quietly grown
+a second copy: the CLI carried the whole sequence, and the portal needed
+exactly that sequence. Two copies of a pipeline is two pipelines.
 
 ## The scheduler runs in-process
 
@@ -109,3 +162,21 @@ and behavioural suites all passed over — among them a sandbox dry-run that
 matched nothing while reporting a flawless run, and every transaction-level
 report export failing outright. The things that break in a server-rendered
 portal are not the things a unit test sees.
+
+`drive-setup.js` is the other half: it starts from a portal with **no
+database**, walks the setup wizard, and ends with a reconciled run.
+
+```bash
+./demo/run-portal.sh --fresh             # a portal with no database at all
+node tests/browser/drive-setup.js
+```
+
+It asserts the things that are easy to get wrong once and never notice: a
+wrong password is refused with the server's own reason rather than written to
+disk, the saved connection is rendered redacted, the install creates the
+database and reports which scripts it applied, pressing install a second time
+recognises its own work instead of failing, the demo seed grants access to the
+person who ran it, and two uploaded files produce the same fifteen matched
+pairs the CLI reports for them. It found the defect that mattered most here:
+`/setup` itself could not be built without a database connection, so every
+request to the one screen that has to work without one answered 500.

@@ -46,4 +46,9 @@
     <a class="nav-link@(Active("Audit"))" asp-controller="Audit" asp-action="Index">
         <i class="bi bi-journal-text" aria-hidden="true"></i><span>Audit log</span>
     </a>
+    @* The only screen that changes where the database is, and the only one
+       that answers on a portal which has none yet. *@
+    <a class="nav-link@(Active("Setup"))" asp-controller="Setup" asp-action="Index">
+        <i class="bi bi-database-gear" aria-hidden="true"></i><span>Database &amp; setup</span>
+    </a>
 </nav>

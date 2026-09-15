@@ -72,11 +72,91 @@
             <div class="rc-help mt-3">
                 A second attempt for the same definition and business date is <em>refused</em>, not
                 queued: the run lock is held for the run's duration, and the refusal is recorded as
-                a <code>Rejected</code> run so the attempt is visible rather than lost.
+                a <code>Rejected</code> run so the attempt is visible rather than lost. This form
+                runs against whatever is already staged — to bring files, use the one below.
             </div>
         }
     </div>
 </div>
+
+@if (canOperate)
+{
+    @*
+        The whole pipeline from the browser: two files in, a reconciled run
+        out. Before this, an operator holding two files from a partner needed
+        somebody with a shell.
+    *@
+    <div class="rc-card mb-3">
+        <div class="rc-card-head">
+            <h2>Upload a session and reconcile it</h2>
+            <span class="rc-help">acquire · parse · stage · match · classify · prove the totals</span>
+        </div>
+        <div class="p-3">
+            <form asp-action="Upload" method="post" enctype="multipart/form-data"
+                  class="row g-3 align-items-end">
+                <div class="col-md-4">
+                    <label class="form-label" for="uploadDefinition">Definition</label>
+                    <select class="form-select" id="uploadDefinition" name="definitionId" required
+                            data-rc-definition-sides>
+                        @foreach (var definition in Model.Definitions)
+                        {
+                            <option value="@definition.DefinitionId"
+                                    data-left="@definition.LeftDatasetCode"
+                                    data-right="@definition.RightDatasetCode">
+                                @definition.Code — @definition.Name
+                                @(definition.IsActive ? "" : " (inactive)")
+                            </option>
+                        }
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label" for="uploadDate">Business date</label>
+                    <input class="form-control" type="date" id="uploadDate" name="businessDate"
+                           value="@today.ToString("yyyy-MM-dd")" required>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label" for="uploadSession">Session</label>
+                    <input class="form-control" id="uploadSession" name="sessionRef" placeholder="optional">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label" for="uploadType">Type</label>
+                    <select class="form-select" id="uploadType" name="runType">
+                        <option value="Manual" selected>Manual</option>
+                        <option value="Scheduled">Scheduled</option>
+                        <option value="Rerun">Rerun</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <button class="btn btn-primary w-100" type="submit" id="rc-upload-submit">
+                        Upload and run
+                    </button>
+                </div>
+
+                <div class="col-md-6">
+                    <label class="form-label" for="leftFile">
+                        Left file — <span class="rc-mono" data-rc-left>—</span>
+                    </label>
+                    <input class="form-control" type="file" id="leftFile" name="leftFile">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label" for="rightFile">
+                        Right file — <span class="rc-mono" data-rc-right>—</span>
+                    </label>
+                    <input class="form-control" type="file" id="rightFile" name="rightFile">
+                </div>
+
+                <div class="col-12 rc-help">
+                    Each file is parsed with the format effective for that <em>business date</em>, so
+                    a file from 2024 still reads correctly after the layout changed. A row that
+                    fails to parse is rejected with its line, field and reason, and the rest of the
+                    file still loads. The original is stored on disk with its SHA-256 — never as a
+                    database blob, which at two million rows a day is how a database becomes
+                    unmanageable.
+                </div>
+            </form>
+        </div>
+    </div>
+}
 
 <div class="rc-card">
     <div class="rc-card-head">
@@ -85,3 +165,7 @@
     </div>
     <partial name="_RunTable" model="Model.Runs" />
 </div>
+
+@section Scripts {
+    <script src="~/js/runs.js"></script>
+}

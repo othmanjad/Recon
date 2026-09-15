@@ -36,6 +36,11 @@ function check(condition, message) {
    but logs a 404 for its own script is broken, just not visibly. */
 function watch(page, label) {
     const errs = [];
+
+    /* Confirmation dialogs are accepted. Without a handler the browser
+       dismisses them, which cancels the submit and makes a destructive
+       button look like a button that does nothing. */
+    page.on("dialog", dialog => dialog.accept());
     page.on("console", m => {
         if (m.type() === "error") { errs.push(`${label}: console: ${m.text()}`); }
     });
@@ -52,6 +57,16 @@ function watch(page, label) {
         if (r.status() >= 500) { errs.push(`${label}: HTTP ${r.status()} for ${r.url()}`); }
     });
     return errs;
+}
+
+/* page.waitForLoadState returns immediately when the current page is already
+   loaded, so using it after a click can read the page before the navigation.
+   This waits for the navigation the click starts. */
+async function submit(page, locator, timeout = 120000) {
+    await Promise.all([
+        page.waitForNavigation({ waitUntil: "load", timeout }),
+        locator.click(),
+    ]);
 }
 
 async function signIn(context, userName) {
@@ -111,8 +126,8 @@ async function shot(page, name) {
         /* The shell must have rendered: a view that throws mid-render can
            still return 200 with a truncated page. */
         check(await omar.locator(".rc-brand").count() === 1, `${url} lost the header`);
-        check(await omar.locator(".rc-sidebar .nav-link").count() === 12,
-            `${url} rendered ${await omar.locator(".rc-sidebar .nav-link").count()} nav links, expected 12`);
+        check(await omar.locator(".rc-sidebar .nav-link").count() === 13,
+            `${url} rendered ${await omar.locator(".rc-sidebar .nav-link").count()} nav links, expected 13`);
         check(await omar.locator("tbody:empty").count() === 0,
             `${url} left an empty table body`);
 
@@ -299,6 +314,68 @@ async function shot(page, name) {
         `the companion list offered a slot outside the companion pool: ${companions.join(", ")}`);
 
     await shot(omar, "datasets-edit");
+
+    /* The activate toggle, both ways. Razor renders a BOOLEAN attribute value
+       as the HTML boolean form — value="value" when true, and no attribute at
+       all when false — so `value="@(!dataset.IsActive)"` posted the string
+       "value" to a bool parameter, which binds as false. Every one of these
+       buttons deactivated, whatever it said on it, and nothing noticed
+       because nothing pressed them. */
+    let activateLabel = await omar.locator('form[action*="/Datasets/Activate"] button')
+        .first().innerText();
+
+    await submit(omar, omar.locator('form[action*="/Datasets/Activate"] button').first(), 60000);
+    let datasetsText = await omar.locator("body").innerText();
+
+    check(/deactivated\.|activated\./.test(datasetsText),
+        `the dataset activate toggle said nothing (button read "${activateLabel}")`);
+
+    const flipped = await omar.locator('form[action*="/Datasets/Activate"] button')
+        .first().innerText();
+
+    check(flipped.trim() !== activateLabel.trim(),
+        `the dataset toggle still reads "${flipped}" after being pressed — it did not flip`);
+
+    // Put it back the way it was found.
+    await submit(omar, omar.locator('form[action*="/Datasets/Activate"] button').first(), 60000);
+
+    check((await omar.locator('form[action*="/Datasets/Activate"] button').first().innerText())
+        .trim() === activateLabel.trim(),
+        "pressing the dataset toggle twice did not return it to its original state");
+
+    // =================================================================
+    // 6b. The definition's activate toggle, both ways — the same Razor
+    //     boolean-attribute trap as the dataset one.
+    // =================================================================
+    await omar.goto(BASE + "/counterparties", { waitUntil: "load" });
+
+    const definitionToggle = () => omar
+        .locator('form[action*="/Counterparties/ActivateDefinition"] button').first();
+
+    if (await definitionToggle().count() > 0) {
+        const before = (await definitionToggle().innerText()).trim();
+
+        await submit(omar, definitionToggle(), 60000);
+        const counterpartiesText = await omar.locator("body").innerText();
+
+        check(/activated\.|deactivated\./.test(counterpartiesText),
+            "the definition activate toggle said nothing");
+
+        const after = (await definitionToggle().innerText()).trim();
+        check(after !== before,
+            `the definition toggle still reads "${after}" after being pressed`);
+
+        // And back: a definition left deactivated would make every later run
+        // in this suite fail for the wrong reason.
+        await submit(omar, definitionToggle(), 60000);
+
+        check((await definitionToggle().innerText()).trim() === before,
+            "pressing the definition toggle twice did not restore its state");
+        check(/activated\./.test(await omar.locator("body").innerText()),
+            "re-activating the definition was not confirmed — activation was refused");
+    } else {
+        problems.push("no definition activate toggle was offered to a Configure user");
+    }
 
     // =================================================================
     // 7. Settings: the type check refuses a value the column would take.

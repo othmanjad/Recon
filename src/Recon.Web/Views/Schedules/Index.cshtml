@@ -6,6 +6,7 @@
     var policies = (List<AlertPolicyRow>)ViewData["Policies"]!;
     var canConfigure = ViewData["CanConfigure"] is true;
     var schedulerEnabled = ViewData["SchedulerEnabled"] is true;
+    var schedulerEnabledByHost = ViewData["SchedulerEnabledByHost"] is true;
     var serverNow = (DateTime)ViewData["ServerNow"]!;
 
     var eventTypes = new[]
@@ -19,18 +20,67 @@
     <span class="rc-help">server clock @serverNow.ToString("yyyy-MM-dd HH:mm") UTC</span>
 </div>
 
-@if (!schedulerEnabled)
-{
-    @*
-        An enabled schedule with the scheduler switched off is the failure
-        that looks like nothing at all.
-    *@
-    <div class="alert alert-danger" role="alert">
-        <strong>The in-process scheduler is disabled</strong>
-        (<code>Recon:Scheduler:Enabled = false</code>). Schedules below are stored and will not
-        fire.
+@*
+    An enabled schedule with the scheduler switched off is the failure that
+    looks like nothing at all, so the state and the switch are together.
+*@
+<div class="rc-card mb-3">
+    <div class="rc-card-head">
+        <h2>The scheduler</h2>
+        @if (!schedulerEnabledByHost)
+        {
+            <span class="badge text-bg-danger">disabled by the host</span>
+        }
+        else if (schedulerEnabled)
+        {
+            <span class="badge text-bg-success">running</span>
+        }
+        else
+        {
+            <span class="badge text-bg-secondary">stopped</span>
+        }
     </div>
-}
+    <div class="p-3">
+        @if (!schedulerEnabledByHost)
+        {
+            <div class="alert alert-danger small mb-0">
+                <strong>Disabled for this whole deployment</strong> by
+                <code>Recon:Scheduler:Enabled = false</code> in the host's configuration. Schedules
+                below are stored and will not fire, and the portal cannot override it — that
+                setting exists so a deployment can be sure nothing fires.
+            </div>
+        }
+        else
+        {
+            <div class="d-flex gap-2 flex-wrap align-items-center">
+                @if (canConfigure)
+                {
+                    <form asp-action="Scheduler" method="post" class="m-0">
+                        <input type="hidden" name="enabled" value="@(schedulerEnabled ? "false" : "true")">
+                        <button class="btn btn-sm @(schedulerEnabled ? "btn-outline-danger" : "btn-primary")"
+                                type="submit"
+                                data-rc-confirm="@(schedulerEnabled
+                                    ? "Stop the scheduler? Schedules will not fire until it is started again."
+                                    : "Start the scheduler?")">
+                            @(schedulerEnabled ? "Stop the scheduler" : "Start the scheduler")
+                        </button>
+                    </form>
+                }
+                <form asp-action="Maintenance" method="post" class="m-0">
+                    <button class="btn btn-sm btn-outline-secondary" type="submit">
+                        Run housekeeping and alert checks now
+                    </button>
+                </form>
+                <span class="rc-help">
+                    Stopping it takes effect within a minute and needs no restart. Housekeeping is
+                    the sandbox purge, the partition lookahead and the retention report — the same
+                    methods the nightly tick calls, so pressing this cannot mean something
+                    different from what the clock does.
+                </span>
+            </div>
+        }
+    </div>
+</div>
 
 <div class="alert alert-light border small">
     A cron expression is evaluated in the <strong>schedule's</strong> time zone, not the server's:

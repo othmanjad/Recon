@@ -31,8 +31,22 @@ public sealed class AccessService(SqlConnection connection, IHttpContextAccessor
 
     public string UserName(ClaimsPrincipal? user) =>
         user?.FindFirst(ClaimTypes.Name)?.Value
-        ?? _accessor?.HttpContext?.User.FindFirst(ClaimTypes.Name)?.Value
-        ?? "anonymous";
+        ?? NameOf(_accessor?.HttpContext?.User);
+
+    /// <summary>
+    /// Who the caller is, without needing a database.
+    ///
+    /// <para>
+    /// The setup screens need this: they run on a portal that has no
+    /// connection yet, so they cannot take an <see cref="AccessService"/> —
+    /// constructing one needs a connection, and the one screen that must
+    /// answer without a database would be the one screen that cannot. It is
+    /// static and here rather than a second copy, so "who is this" has one
+    /// definition.
+    /// </para>
+    /// </summary>
+    public static string NameOf(ClaimsPrincipal? user) =>
+        user?.FindFirst(ClaimTypes.Name)?.Value ?? "anonymous";
 
     /// <summary>
     /// The counterparties this user may see, and at what level.

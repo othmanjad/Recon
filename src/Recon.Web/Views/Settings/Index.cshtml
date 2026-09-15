@@ -105,6 +105,25 @@
     }
 </div>
 
+@*
+    Where the database is is not a platform setting: it is how the portal
+    reaches the table these settings live in. It belongs on the setup screen,
+    and this says so rather than leaving someone to look for it here.
+*@
+<div class="rc-card mb-3">
+    <div class="rc-card-head">
+        <h2>Deployment</h2>
+        <a class="btn btn-sm btn-outline-secondary" asp-controller="Setup" asp-action="Index">
+            Database &amp; setup
+        </a>
+    </div>
+    <div class="p-3 rc-help">
+        The connection string, the file storage root and the schema installer are on the setup
+        screen. So is the scheduler's state, which the Schedules screen can stop and start without
+        a restart.
+    </div>
+</div>
+
 <div class="row g-3">
     <div class="col-lg-6">
         <div class="rc-card h-100">

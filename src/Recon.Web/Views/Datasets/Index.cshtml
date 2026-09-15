@@ -3,11 +3,16 @@
 @{
     var datasets = (List<DatasetRow>)ViewData["Datasets"]!;
     var selected = ViewData["Selected"] as Dataset;
+    var selectedRow = ViewData["SelectedRow"] as DatasetRow;
     var slots = (List<SlotOption>)ViewData["Slots"]!;
     var problems = (IReadOnlyList<string>)ViewData["Problems"]!;
-    var selectedRow = selected is null
-        ? null
-        : datasets.FirstOrDefault(d => d.DatasetId == selected.DatasetId);
+    var counterparties = (List<CounterpartyRow>)ViewData["Counterparties"]!;
+    var currencies = (List<Currency>)ViewData["Currencies"]!;
+    var formats = (List<FormatRow>)ViewData["Formats"]!;
+    var format = ViewData["Format"] as FormatRow;
+    var mappings = (List<MappingRow>)ViewData["Mappings"]!;
+    var canConfigure = ViewData["CanConfigure"] is true;
+    var today = DateOnly.FromDateTime(DateTime.Today);
 
     var usedSlots = selected?.Fields.Select(f => f.StorageSlot).ToHashSet(StringComparer.Ordinal)
         ?? new HashSet<string>(StringComparer.Ordinal);
@@ -73,7 +78,7 @@ else
                         }
                         <form asp-action="Activate" method="post" class="m-0">
                             <input type="hidden" name="id" value="@selected.DatasetId">
-                            <input type="hidden" name="active" value="@(!selected.IsActive)">
+                            <input type="hidden" name="active" value="@(selected.IsActive ? "false" : "true")">
                             <button class="btn btn-sm @(selected.IsActive ? "btn-outline-secondary" : "btn-outline-primary")"
                                     type="submit">
                                 @(selected.IsActive ? "Deactivate" : "Activate")
@@ -389,6 +394,487 @@ else
             </form>
         </div>
     </div>
+}
+
+@if (counterparties.Count > 0)
+{
+    @*
+        A dataset can now be created here rather than in SQL. Without this the
+        Phase 3 exit criterion — Operations onboards a second counterparty
+        unassisted — could not be met from the portal at all: a counterparty
+        with no dataset has nothing to reconcile.
+    *@
+    <div class="rc-card mt-3">
+        <div class="rc-card-head">
+            <h2>@(selectedRow is null ? "Add a dataset" : "Edit " + selectedRow.Code)</h2>
+            @if (selectedRow is not null)
+            {
+                <a class="btn btn-sm btn-outline-secondary" asp-action="Index">New dataset</a>
+            }
+        </div>
+        <div class="p-3">
+            <form asp-action="SaveDataset" method="post" class="row g-3">
+                @if (selected is not null && canConfigure)
+                {
+                    <input type="hidden" name="datasetId" value="@selected.DatasetId">
+                }
+                <div class="col-md-3">
+                    <label class="form-label" for="counterpartyId">Counterparty</label>
+                    <select class="form-select" id="counterpartyId" name="counterpartyId" required>
+                        @foreach (var counterparty in counterparties)
+                        {
+                            <option value="@counterparty.CounterpartyId"
+                                    selected="@(selectedRow?.CounterpartyId == counterparty.CounterpartyId)">
+                                @counterparty.Code
+                            </option>
+                        }
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label" for="dsCode">Code</label>
+                    <input class="form-control" id="dsCode" name="code" required
+                           value="@selectedRow?.Code" placeholder="CLIQ_SESSION">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label" for="dsName">Name</label>
+                    <input class="form-control" id="dsName" name="name" required
+                           value="@selectedRow?.Name">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label" for="providerType">Provider</label>
+                    <select class="form-select" id="providerType" name="providerType">
+                        @foreach (var provider in Enum.GetNames<ProviderType>())
+                        {
+                            <option value="@provider"
+                                    selected="@(selectedRow?.ProviderType == provider)">
+                                @provider
+                            </option>
+                        }
+                    </select>
+                    <div class="form-text">
+                        File, a SQL view or procedure, or an API. The engine treats all three as a
+                        dataset.
+                    </div>
+                </div>
+
+                <div class="col-md-3">
+                    <label class="form-label" for="timeZone">Time zone</label>
+                    <input class="form-control" id="timeZone" name="timeZone"
+                           value="@(selectedRow?.TimeZone ?? "Asia/Amman")">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label" for="defaultCurrency">Default currency</label>
+                    <select class="form-select" id="defaultCurrency" name="defaultCurrency">
+                        <option value="">(none)</option>
+                        @foreach (var currency in currencies)
+                        {
+                            <option value="@currency.Code"
+                                    selected="@(selectedRow?.DefaultCurrency == currency.Code)">
+                                @currency.Code — @currency.MinorUnits minor units
+                            </option>
+                        }
+                    </select>
+                    <div class="form-text">
+                        The scale every amount in this dataset is parsed into. Wrong here is a
+                        factor-of-ten error in every row.
+                    </div>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label" for="duplicateKeyFields">Duplicate key</label>
+                    <input class="form-control rc-mono" id="duplicateKeyFields"
+                           name="duplicateKeyFields" value="@selectedRow?.DuplicateKeyFields"
+                           placeholder="REF_PRIMARY, TX_DATETIME">
+                    <div class="form-text">
+                        Field codes, comma-separated, and each must be in the registry above. The
+                        second occurrence of a key in one file is flagged <code>Duplicate</code>
+                        before matching — without a key declared, a file containing the same
+                        reference twice matches one row and orphans the other with no signal that
+                        the source was the problem.
+                    </div>
+                </div>
+
+                <div class="col-12">
+                    <button class="btn btn-primary" type="submit">Save dataset</button>
+                    @if (selected is null)
+                    {
+                        <span class="rc-help ms-2">
+                            Created inactive and with no fields — the registry, a file format and
+                            its mappings come next, and activation checks them.
+                        </span>
+                    }
+                </div>
+            </form>
+        </div>
+    </div>
+}
+
+@if (selected is not null)
+{
+    <div class="rc-card mt-3">
+        <div class="rc-card-head">
+            <h2>File formats</h2>
+            <span class="rc-help">effective-dated, so a 2024 file still reads correctly in 2026</span>
+        </div>
+        <div class="rc-table-scroll">
+            <table class="table rc-table table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Version</th><th>Type</th><th>Effective</th><th>Layout</th>
+                        <th class="text-end">Mappings</th><th class="text-end">Max errors</th><th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (formats.Count == 0)
+                    {
+                        <tr>
+                            <td colspan="7" class="rc-empty">
+                                No format. This dataset cannot be loaded at all — a file cannot be
+                                parsed without one, and guessing a layout would stage wrong data.
+                            </td>
+                        </tr>
+                    }
+                    @foreach (var row in formats)
+                    {
+                        <tr class="@(format?.FileFormatId == row.FileFormatId ? "table-active" : null)">
+                            <td class="rc-num">
+                                @row.Version
+                                @if (row.CoversToday)
+                                {
+                                    <span class="badge text-bg-primary">in force today</span>
+                                }
+                            </td>
+                            <td>@row.FormatType</td>
+                            <td class="rc-mono">
+                                @row.EffectiveFrom.ToString("yyyy-MM-dd") →
+                                @(row.EffectiveTo?.ToString("yyyy-MM-dd") ?? "open")
+                            </td>
+                            <td class="rc-mono rc-help">
+                                @if (row.FormatType == "Csv")
+                                {
+                                    <text>delimiter “@row.Delimiter”</text>
+                                    @if (!string.IsNullOrEmpty(row.TextQualifier))
+                                    {
+                                        <text>, qualifier “@row.TextQualifier”</text>
+                                    }
+                                    <text>, @(row.HasHeader ? "header" : "no header")</text>
+                                }
+                                else
+                                {
+                                    <text>@row.RecordPath</text>
+                                }
+                            </td>
+                            <td class="rc-num @(row.MappingCount == 0 ? "rc-num-neg" : null)">
+                                @row.MappingCount
+                            </td>
+                            <td class="rc-num">@row.MaxParseErrors</td>
+                            <td class="text-end">
+                                <a class="btn btn-sm btn-outline-secondary"
+                                   asp-action="Index" asp-route-id="@selected.DatasetId"
+                                   asp-route-formatId="@row.FileFormatId">Mappings</a>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        @if (canConfigure)
+        {
+            <div class="p-3 border-top">
+                <form asp-action="SaveFormat" method="post" class="row g-3" id="rc-format-form">
+                    <input type="hidden" name="datasetId" value="@selected.DatasetId">
+                    <div class="col-md-3">
+                        <label class="form-label" for="editFormat">Editing</label>
+                        <select class="form-select" id="editFormat" name="fileFormatId" data-rc-formats>
+                            <option value="">(new version)</option>
+                            @foreach (var row in formats)
+                            {
+                                <option value="@row.FileFormatId"
+                                        selected="@(format?.FileFormatId == row.FileFormatId)"
+                                        data-type="@row.FormatType"
+                                        data-version="@row.Version"
+                                        data-from="@row.EffectiveFrom.ToString("yyyy-MM-dd")"
+                                        data-to="@(row.EffectiveTo?.ToString("yyyy-MM-dd"))"
+                                        data-delimiter="@row.Delimiter"
+                                        data-qualifier="@row.TextQualifier"
+                                        data-encoding="@row.Encoding"
+                                        data-header="@row.HasHeader.ToString().ToLowerInvariant()"
+                                        data-skiplead="@row.SkipLeadingLines"
+                                        data-skiptrail="@row.SkipTrailingLines"
+                                        data-recordpath="@row.RecordPath"
+                                        data-pattern="@row.FileNamePattern"
+                                        data-maxerrors="@row.MaxParseErrors">
+                                    v@row.Version (@row.FormatType, @row.EffectiveFrom.ToString("yyyy-MM-dd"))
+                                </option>
+                            }
+                        </select>
+                        <div class="form-text">
+                            A layout change is a <strong>new version</strong> with a later effective
+                            date. Editing the one in force changes how every historical re-run
+                            parses.
+                        </div>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" for="formatType">Type</label>
+                        <select class="form-select" id="formatType" name="formatType">
+                            @foreach (var type in Enum.GetNames<FileFormatType>())
+                            {
+                                <option value="@type" selected="@(format?.FormatType == type)">@type</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="col-md-1">
+                        <label class="form-label" for="version">Version</label>
+                        <input class="form-control" type="number" id="version" name="version" min="1"
+                               value="@(formats.Count == 0 ? 1 : formats.Max(f => f.Version) + 1)" required>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" for="effectiveFrom">Effective from</label>
+                        <input class="form-control" type="date" id="effectiveFrom" name="effectiveFrom"
+                               value="@today.ToString("yyyy-MM-dd")" required>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" for="effectiveTo">Effective to</label>
+                        <input class="form-control" type="date" id="effectiveTo" name="effectiveTo">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" for="maxParseErrors">Max parse errors</label>
+                        <input class="form-control" type="number" id="maxParseErrors" name="maxParseErrors"
+                               min="0" value="1000" required>
+                        <div class="form-text">
+                            Beyond this the file is treated as the wrong format and the load stops —
+                            otherwise a mis-sent file writes one error row per source row.
+                        </div>
+                    </div>
+
+                    <div class="col-md-2 rc-csv-only">
+                        <label class="form-label" for="delimiter">Delimiter</label>
+                        <input class="form-control rc-mono" id="delimiter" name="delimiter" value=",">
+                    </div>
+                    <div class="col-md-2 rc-csv-only">
+                        <label class="form-label" for="textQualifier">Text qualifier</label>
+                        <input class="form-control rc-mono" id="textQualifier" name="textQualifier"
+                               value="&quot;">
+                    </div>
+                    <div class="col-md-2 rc-csv-only">
+                        <label class="form-label" for="skipLeadingLines">Skip leading</label>
+                        <input class="form-control" type="number" id="skipLeadingLines"
+                               name="skipLeadingLines" min="0" value="0">
+                    </div>
+                    <div class="col-md-2 rc-csv-only">
+                        <label class="form-label" for="skipTrailingLines">Skip trailing</label>
+                        <input class="form-control" type="number" id="skipTrailingLines"
+                               name="skipTrailingLines" min="0" value="0">
+                        <div class="form-text">A trailer line with a control total, for instance.</div>
+                    </div>
+                    <div class="col-md-2 rc-csv-only d-flex align-items-end">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="hasHeader"
+                                   name="hasHeader" value="true" checked>
+                            <input type="hidden" name="hasHeader" value="false">
+                            <label class="form-check-label" for="hasHeader">Has a header row</label>
+                        </div>
+                    </div>
+
+                    <div class="col-md-4 rc-path-only">
+                        <label class="form-label" for="recordPath">Record path</label>
+                        <input class="form-control rc-mono" id="recordPath" name="recordPath"
+                               placeholder="//Document/Transaction or $.transactions[*]">
+                        <div class="form-text">
+                            XPath for XML, JsonPath for JSON. Without it the reader does not know
+                            where one record ends and the next begins.
+                        </div>
+                    </div>
+
+                    <div class="col-md-3">
+                        <label class="form-label" for="encoding">Encoding</label>
+                        <input class="form-control" id="encoding" name="encoding" value="UTF-8">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" for="fileNamePattern">File name pattern</label>
+                        <input class="form-control rc-mono" id="fileNamePattern" name="fileNamePattern"
+                               placeholder="^CLIQ_SESSION_\d{8}_S\d+\.csv$">
+                        <div class="form-text">A regex, checked on acquisition. Optional.</div>
+                    </div>
+
+                    <div class="col-12">
+                        <button class="btn btn-primary" type="submit">Save format</button>
+                    </div>
+                </form>
+            </div>
+        }
+    </div>
+
+    @if (format is not null)
+    {
+        <div class="rc-card mt-3">
+            <div class="rc-card-head">
+                <h2>Field mappings — v@format.Version (@format.FormatType)</h2>
+                <span class="rc-help">
+                    @mappings.Count of @selected.Fields.Count registry field(s) mapped
+                </span>
+            </div>
+            <div class="rc-table-scroll">
+                <table class="table rc-table table-hover align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th>Field</th><th>Source</th><th>Parse format</th>
+                            <th>Transforms</th><th>Default</th><th>Required</th><th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (mappings.Count == 0)
+                        {
+                            <tr>
+                                <td colspan="7" class="rc-empty">
+                                    Nothing is mapped, so this format stages nothing.
+                                </td>
+                            </tr>
+                        }
+                        @foreach (var mapping in mappings)
+                        {
+                            <tr>
+                                <td>
+                                    <code class="rc-field">@mapping.FieldCode</code>
+                                    <div class="rc-help">
+                                        @mapping.DisplayLabel · @mapping.DataType · @mapping.StorageSlot
+                                    </div>
+                                </td>
+                                <td class="rc-mono">@mapping.SourcePath</td>
+                                <td class="rc-mono">@(mapping.ParseFormat ?? "—")</td>
+                                <td class="rc-mono rc-help" style="max-width:280px">
+                                    @(mapping.TransformChainJson ?? "—")
+                                </td>
+                                <td class="rc-mono">@(mapping.DefaultValue ?? "—")</td>
+                                <td>
+                                    @if (mapping.IsRequired)
+                                    {
+                                        <i class="bi bi-check-lg text-success" aria-label="required"></i>
+                                    }
+                                    else
+                                    {
+                                        <i class="bi bi-dash text-muted" aria-label="optional"></i>
+                                    }
+                                </td>
+                                <td class="text-end">
+                                    @if (canConfigure)
+                                    {
+                                        <div class="d-flex gap-1 justify-content-end">
+                                            <button class="btn btn-sm btn-outline-secondary rc-mapping-edit"
+                                                    type="button"
+                                                    data-id="@mapping.FieldMappingId"
+                                                    data-field="@mapping.FieldCode"
+                                                    data-path="@mapping.SourcePath"
+                                                    data-format="@mapping.ParseFormat"
+                                                    data-transforms="@mapping.TransformChainJson"
+                                                    data-default="@mapping.DefaultValue"
+                                                    data-required="@mapping.IsRequired.ToString().ToLowerInvariant()">
+                                                Edit
+                                            </button>
+                                            <form asp-action="DeleteMapping" method="post" class="m-0">
+                                                <input type="hidden" name="datasetId" value="@selected.DatasetId">
+                                                <input type="hidden" name="fileFormatId" value="@format.FileFormatId">
+                                                <input type="hidden" name="fieldMappingId" value="@mapping.FieldMappingId">
+                                                <button class="btn btn-sm btn-outline-danger" type="submit"
+                                                        data-rc-confirm="Remove the mapping for @mapping.FieldCode?">
+                                                    Remove
+                                                </button>
+                                            </form>
+                                        </div>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+
+            @if (canConfigure)
+            {
+                <div class="p-3 border-top">
+                    <form asp-action="SaveMapping" method="post" class="row g-3" id="rc-mapping-form">
+                        <input type="hidden" name="datasetId" value="@selected.DatasetId">
+                        <input type="hidden" name="fileFormatId" value="@format.FileFormatId">
+                        <input type="hidden" name="fieldMappingId" id="fieldMappingId">
+
+                        <div class="col-md-3">
+                            <label class="form-label" for="mapFieldCode">Registry field</label>
+                            <select class="form-select" id="mapFieldCode" name="fieldCode" required>
+                                @foreach (var field in selected.Fields.OrderBy(f => f.DisplayOrder))
+                                {
+                                    <option value="@field.FieldCode"
+                                            data-type="@field.DataType"
+                                            data-mapped="@(mappings.Any(m => m.FieldCode == field.FieldCode)
+                                                ? "true" : "false")">
+                                        @field.DisplayLabel (@field.FieldCode)@(mappings.Any(m => m.FieldCode == field.FieldCode) ? " — mapped" : "")
+                                    </option>
+                                }
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label" for="sourcePath">Source</label>
+                            <input class="form-control rc-mono" id="sourcePath" name="sourcePath" required
+                                   placeholder="a column name, or an XPath, or a JsonPath">
+                            <div class="form-text" id="rc-source-hint"></div>
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label" for="parseFormat">Parse format</label>
+                            <input class="form-control rc-mono" id="parseFormat" name="parseFormat"
+                                   placeholder="yyyyMMddHHmmss">
+                            <div class="form-text" id="rc-parse-hint"></div>
+                        </div>
+                        <div class="col-md-2">
+                            <label class="form-label" for="defaultValue">Default</label>
+                            <input class="form-control" id="defaultValue" name="defaultValue"
+                                   placeholder="when absent">
+                        </div>
+                        <div class="col-md-2 d-flex align-items-end">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="mapRequired"
+                                       name="isRequired" value="true">
+                                <input type="hidden" name="isRequired" value="false">
+                                <label class="form-check-label" for="mapRequired">Required</label>
+                            </div>
+                        </div>
+
+                        <div class="col-12">
+                            <label class="form-label" for="transformChainJson">Transform chain</label>
+                            <input class="form-control rc-mono" id="transformChainJson"
+                                   name="transformChainJson"
+                                   placeholder='[{"op":"Trim"},{"op":"Upper"}]'>
+                            @*
+                                Validated by the engine's own parser on save, so
+                                the portal accepts exactly what the loader will.
+                            *@
+                            @*
+                                The list comes from the engine, not from beside
+                                it: a help text naming an operation the parser
+                                does not know sends an operator to a failed run.
+                            *@
+                            <div class="form-text">
+                                A JSON array of steps, validated by the loader's own parser on save:
+                                @Html.Raw(string.Join(", ",
+                                    Recon.Engine.Parsing.Transforms.Operations
+                                        .Select(o => $"<code>{o}</code>"))).
+                                <code>Substring</code> takes <code>start</code> and
+                                <code>length</code>, <code>RegexExtract</code> a
+                                <code>pattern</code>, <code>Replace</code> a <code>from</code> and
+                                <code>to</code>. A regex here runs against two million values per
+                                file, so it is bounded by a timeout.
+                            </div>
+                        </div>
+
+                        <div class="col-12 d-flex gap-2">
+                            <button class="btn btn-primary" type="submit">Save mapping</button>
+                            <button class="btn btn-outline-secondary" type="button" id="rc-mapping-reset">
+                                New mapping
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            }
+        </div>
+    }
 }
 
 @section Scripts {

@@ -118,4 +118,89 @@ jQuery(function ($) {
 
     filterSlots();
     syncNormalization();
+
+    /* ---- file formats ----------------------------------------------
+       A CSV format needs a delimiter and a header flag; XML and JSON
+       need a record path and have no use for either. Showing all of it
+       at once invites a format that names a delimiter for an XPath. */
+    var $formatType = $("#formatType");
+
+    function syncFormatType() {
+        var type = $formatType.val();
+        $(".rc-csv-only").toggle(type === "Csv");
+        $(".rc-path-only").toggle(type === "Xml" || type === "Json");
+    }
+
+    $formatType.on("change", syncFormatType);
+    syncFormatType();
+
+    $("select[data-rc-formats]").on("change", function () {
+        var $o = $(this).find("option:selected");
+
+        if (!$o.val()) { return; }
+
+        $("#formatType").val($o.data("type"));
+        $("#version").val($o.data("version"));
+        $("#effectiveFrom").val($o.data("from"));
+        $("#effectiveTo").val($o.data("to") || "");
+        $("#delimiter").val($o.data("delimiter") || "");
+        $("#textQualifier").val($o.data("qualifier") || "");
+        $("#encoding").val($o.data("encoding") || "UTF-8");
+        $("#skipLeadingLines").val($o.data("skiplead"));
+        $("#skipTrailingLines").val($o.data("skiptrail"));
+        $("#recordPath").val($o.data("recordpath") || "");
+        $("#fileNamePattern").val($o.data("pattern") || "");
+        $("#maxParseErrors").val($o.data("maxerrors"));
+        $("#hasHeader").prop("checked", $o.data("header") === true || $o.data("header") === "true");
+
+        syncFormatType();
+    });
+
+    /* ---- field mappings --------------------------------------------
+       The hint depends on both the format type and the field's declared
+       type: an XPath and a column name are different things, and a
+       DateTime field is the only one where a parse format is usually
+       required rather than optional. */
+    function syncMappingHints() {
+        var type = $formatType.val() || "Csv";
+        var fieldType = $("#mapFieldCode option:selected").data("type");
+
+        $("#rc-source-hint").text(
+            type === "Csv" ? "A column name from the header, or a 1-based ordinal."
+                : type === "Xml" ? "An XPath relative to the record element."
+                : "A JsonPath relative to the record object.");
+
+        if (fieldType === "DateTime") {
+            $("#rc-parse-hint").text("Required for most date formats, e.g. yyyyMMddHHmmss.");
+        } else if (fieldType === "Integer" || fieldType === "Decimal") {
+            $("#rc-parse-hint").text("Only for a non-plain number, e.g. #,##0.000.");
+        } else {
+            $("#rc-parse-hint").text("Usually empty for text.");
+        }
+    }
+
+    $("#mapFieldCode").on("change", syncMappingHints);
+    $formatType.on("change", syncMappingHints);
+    syncMappingHints();
+
+    $(".rc-mapping-edit").on("click", function () {
+        var $b = $(this);
+
+        $("#fieldMappingId").val($b.data("id"));
+        $("#mapFieldCode").val($b.data("field"));
+        $("#sourcePath").val($b.data("path"));
+        $("#parseFormat").val($b.data("format") || "");
+        $("#transformChainJson").val($b.data("transforms") || "");
+        $("#defaultValue").val($b.data("default") || "");
+        $("#mapRequired").prop("checked", $b.data("required") === true || $b.data("required") === "true");
+
+        syncMappingHints();
+        $("html, body").animate({ scrollTop: $("#rc-mapping-form").offset().top - 70 }, 200);
+    });
+
+    $("#rc-mapping-reset").on("click", function () {
+        $("#rc-mapping-form")[0].reset();
+        $("#fieldMappingId").val("");
+        syncMappingHints();
+    });
 });

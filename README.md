@@ -32,6 +32,29 @@ Start with `demo/README.md` to see it run, `db/README.md` for the five things
 worth knowing before reading the schema, and `src/Recon.Web/README.md` for the
 portal.
 
+## Running it
+
+A SQL Server the portal can reach is the only prerequisite — **it builds its
+own database**:
+
+```bash
+dotnet run --project src/Recon.Web
+```
+
+Sign in with any name and the portal sends you to `/setup`, because it has no
+database yet. Name the server, test the connection, save it, then press
+*Create the database and install*: that runs `CREATE DATABASE` and the four
+schema scripts in `db/`, recording each with the hash of its text so the
+button is safe to press twice. *Load the demo configuration* gives you a
+complete worked reconciliation and grants you access to it. Then upload the
+two files in `demo/files/` on the Runs screen and watch a session reconcile.
+
+Nothing in operating the platform needs a shell: the connection string, the
+schema install, the first access grant, running a session from two files,
+stopping the scheduler and running the housekeeping are all screens. With
+Docker and no .NET installed, `./demo/run-demo.sh` then
+`./demo/run-portal.sh --background` does the same thing in containers.
+
 ## The constraint that shapes everything
 
 **~2,000,000 transactions per day**, 730M+ rows a year. Three consequences, none
@@ -67,9 +90,9 @@ exception.**
 |------|-------|
 | Design document | v1.0, reviewed twice |
 | Database schema | Complete, consolidated, and **executed** — 38 tables, built on SQL Server 2022 with 88 passing tests |
-| Portal | Complete: twelve screens in ASP.NET Core MVC against the real database, driven in Chromium by 115 assertions |
+| Portal | Complete: thirteen screens in ASP.NET Core MVC against the real database, including its own setup wizard — it creates and installs its database itself. Driven in Chromium by two suites |
 | Engine (.NET) | Phases 1–7 complete — matching, reporting, fees and interchange, scheduling and alerting, XML and JSON sources. 175 tests, and the 2M-row spike meets every budget |
-| End to end | `./demo/run-demo.sh` then `./demo/run-portal.sh` — Docker is the only prerequisite |
+| End to end | `dotnet run --project src/Recon.Web` against any SQL Server, or `./demo/run-demo.sh` then `./demo/run-portal.sh` with Docker |
 
 Six questions remain open. All are business answers rather than design work, all
 have a place to live in the schema already, and none blocks the Phase 1 build —
@@ -99,9 +122,10 @@ now sets it itself rather than failing in whatever CI pipeline runs it first.
 
 **The portal is executed too**, against the real database rather than mock
 data: `tests/browser/drive-portal.js` signs in as three different operators and
-as an account with no grants, walks every screen, and asserts 115 things about
-what it finds — failing on any console error, any 5xx, or horizontal overflow
-at phone width.
+as an account with no grants, walks every screen, and asserts what it finds —
+failing on any console error, any 5xx, or horizontal overflow at phone width.
+`tests/browser/drive-setup.js` starts one step earlier, from a portal with **no
+database at all**, and walks the setup wizard until a session has reconciled.
 
 Running it found five defects that every other suite had passed over:
 
@@ -123,6 +147,12 @@ Running it found five defects that every other suite had passed over:
   request has.
 - **A user with no grants was shown every counterparty's exception codes** —
   one dropdown was the only read in the portal not filtered by grant.
+
+Driving the first-run path found the one that would have met every new user:
+**`/setup` itself could not be built without a database connection.** The one
+screen that has to answer on an unconfigured portal took a service whose
+constructor needs a connection, so every request to it was a 500 — a portal
+that could not be set up from the screen that sets it up.
 
 **The engine is executed too**, including against volume. 165 unit tests, 10
 integration tests against a live server, and the Phase 1 spike at 2,000,000

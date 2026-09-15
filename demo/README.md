@@ -9,6 +9,14 @@ The whole platform, end to end, from nothing:
 ./demo/run-portal.sh --stop
 ```
 
+Or start from nothing at all and let the portal build its own database, which
+is what a new machine actually looks like:
+
+```bash
+./demo/run-portal.sh --fresh        # a portal with NO database
+#   sign in, then the setup screen creates it and installs the schema
+```
+
 Docker is the only prerequisite — SQL Server and the .NET SDK both run in
 containers, and nothing is installed on the host. It takes a couple of minutes
 the first time (pulling two images) and about twenty seconds after that.
@@ -163,6 +171,6 @@ docker exec -it reconsql /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa \
 | | |
 |---|---|
 | `run-demo.sh` | The script above |
-| `run-portal.sh` | Serves the portal against this database, in a container |
+| `run-portal.sh` | Serves the portal against this database, in a container. `--fresh` starts it with no database so the portal's own setup screen builds one |
 | `01-demo-config.sql` | The whole configuration, commented — read this to see what "onboarding a counterparty" actually consists of |
 | `files/` | The two session CSVs, and a table of what every row is there to exercise |

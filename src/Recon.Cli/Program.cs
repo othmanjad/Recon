@@ -129,62 +129,25 @@ internal static class Program
         using var connection = new SqlConnection(connectionString);
         await connection.OpenAsync().ConfigureAwait(false);
 
-        var config = new ConfigurationRepository(connection);
-        var dataset = await config.LoadDatasetAsync(datasetId).ConfigureAwait(false);
-        var currencies = await config.LoadCurrenciesAsync().ConfigureAwait(false);
-        var settings = await config.LoadSettingsAsync().ConfigureAwait(false);
+        var dataset = await new ConfigurationRepository(connection)
+            .LoadDatasetAsync(datasetId).ConfigureAwait(false);
 
-        var currency = currencies[dataset.DefaultCurrency ?? "JOD"];
-        var format = await FileFormatLoader.LoadAsync(connection, dataset, businessDate)
-            .ConfigureAwait(false);
+        // The same stager the portal and the scheduler use. A CLI that
+        // reimplemented the pipeline would be a second pipeline, and the two
+        // would drift.
+        var outcome = await new FileStager(connection).StageAsync(
+            dataset, Side.Left, runId, businessDate,
+            () => File.OpenText(path), new RunRepository(connection)).ConfigureAwait(false);
 
-        var batchSize = settings.TryGetValue("BulkCopyBatchSize", out var raw)
-            && int.TryParse(raw, CultureInfo.InvariantCulture, out var parsed)
-            ? parsed
-            : 100_000;
+        Console.WriteLine($"staged {outcome.RowsWritten:N0} rows in {outcome.Elapsed.TotalSeconds:N1}s " +
+                          $"({outcome.RowsPerSecond:N0} rows/s), {outcome.Errors.Count:N0} rejected");
 
-        var parser = new RowParser(dataset, format, currency);
-        var reader = new CsvReader(format.Csv);
-        var loader = new StagingBulkLoader(connection, new StagingLoadOptions { BatchSize = batchSize });
-
-        var errors = 0;
-        var stopwatch = Stopwatch.StartNew();
-
-        using var file = File.OpenText(path);
-
-        var result = await loader.LoadAsync(Records()).ConfigureAwait(false);
-        stopwatch.Stop();
-
-        Console.WriteLine($"staged {result.RowsWritten:N0} rows in {result.Elapsed.TotalSeconds:N1}s " +
-                          $"({result.RowsPerSecond:N0} rows/s), {errors:N0} rejected");
-
-        return errors > format.MaxParseErrors ? 1 : 0;
-
-        IEnumerable<StagingRecord> Records()
+        foreach (var failure in outcome.Errors.Take(5))
         {
-            var record = new StagingRecord { DatasetId = datasetId, LoadRunId = runId };
-
-            foreach (var row in reader.Read(file))
-            {
-                if (parser.TryParse(row, record, businessDate, out var failure))
-                {
-                    yield return record;
-                    continue;
-                }
-
-                errors++;
-
-                // E4: a wrong-format file would otherwise produce one error row
-                // per source row, each carrying its raw line.
-                if (errors > format.MaxParseErrors)
-                {
-                    throw new InvalidOperationException(
-                        $"parse errors exceeded MaxParseErrors ({format.MaxParseErrors}); " +
-                        $"the file is being treated as the wrong format. " +
-                        $"First problem at line {failure!.RawRowNumber}: {failure.Message}");
-                }
-            }
+            Console.WriteLine($"  line {failure.RawRowNumber}: {failure.Message}");
         }
+
+        return outcome.Errors.Count > 0 ? 1 : 0;
     }
 
     private static async Task<int> RunAsync(string[] args)
@@ -248,14 +211,14 @@ internal static class Program
 
             if (leftFile is not null)
             {
-                await StageFileAsync(connection, config, runs, definition.Left,
-                    leftFile, businessDate, run.RunId, Side.Left).ConfigureAwait(false);
+                await StageFileAsync(connection, runs, definition, Side.Left,
+                    leftFile, businessDate, run.RunId).ConfigureAwait(false);
             }
 
             if (rightFile is not null)
             {
-                await StageFileAsync(connection, config, runs, definition.Right,
-                    rightFile, businessDate, run.RunId, Side.Right).ConfigureAwait(false);
+                await StageFileAsync(connection, runs, definition, Side.Right,
+                    rightFile, businessDate, run.RunId).ConfigureAwait(false);
             }
 
             var runner = new ReconciliationRunner(connection, runs);
@@ -272,112 +235,40 @@ internal static class Program
     }
 
     /// <summary>
-    /// Parses and stages one file, recording the Parse and Stage stages as run
-    /// steps so a resumed run skips them and the timings appear on the
-    /// dashboard alongside the passes.
+    /// Stages one side and prints what happened. The pipeline itself lives in
+    /// <see cref="FileStager"/>; this is the console's share of it.
     /// </summary>
     private static async Task StageFileAsync(
         SqlConnection connection,
-        ConfigurationRepository config,
         RunRepository runs,
-        Dataset dataset,
+        ReconciliationDefinition definition,
+        Side side,
         string path,
         DateOnly businessDate,
-        long runId,
-        Side side)
+        long runId)
     {
-        var step = await runs.BeginStepAsync(runId, RunStepName.Parse, null, side)
+        var outcome = await new FileStager(connection)
+            .StageAsync(definition, side, runId, businessDate, path, runs)
             .ConfigureAwait(false);
 
-        if (step.AlreadyCompleted)
+        if (outcome.AlreadyStaged)
         {
-            Console.WriteLine($"  {side,-5} {dataset.Code} already staged; skipping");
+            Console.WriteLine($"  {side,-5} {outcome.Dataset} already staged; skipping");
             return;
         }
 
-        try
+        Console.WriteLine($"  {side,-5} {outcome.Dataset}: staged {outcome.RowsWritten:N0} rows " +
+                          $"in {outcome.Elapsed.TotalSeconds:N1}s, {outcome.Errors.Count:N0} rejected");
+
+        foreach (var failure in outcome.Errors.Take(5))
         {
-            var currencies = await config.LoadCurrenciesAsync().ConfigureAwait(false);
-            var settings = await config.LoadSettingsAsync().ConfigureAwait(false);
-            var format = await FileFormatLoader.LoadAsync(connection, dataset, businessDate)
-                .ConfigureAwait(false);
-
-            var currency = currencies[dataset.DefaultCurrency ?? "JOD"];
-            var batchSize = settings.TryGetValue("BulkCopyBatchSize", out var raw)
-                && int.TryParse(raw, CultureInfo.InvariantCulture, out var parsed)
-                ? parsed
-                : 100_000;
-
-            var parser = new RowParser(dataset, format, currency);
-            var reader = new CsvReader(format.Csv);
-            var loader = new StagingBulkLoader(
-                connection, new StagingLoadOptions { BatchSize = batchSize });
-
-            var errors = new List<ParseFailure>();
-            using var file = File.OpenText(path);
-
-            var result = await loader.LoadAsync(Records()).ConfigureAwait(false);
-
-            // Rejected rows go to stg.ParseError with their line, field, reason
-            // and raw line. A console count is not something an operator can
-            // act on.
-            if (errors.Count > 0)
-            {
-                await new ParseErrorWriter(connection).WriteAsync(
-                    runId, businessDate, sourceFileId: null,
-                    errors.Select(e => new ParseErrorRow(
-                        e.Type.ToString(), e.FieldCode, e.Message, e.RawRowNumber, e.RawLine))
-                        .ToList()).ConfigureAwait(false);
-            }
-
-            Console.WriteLine($"  {side,-5} {dataset.Code}: staged {result.RowsWritten:N0} rows " +
-                              $"in {result.Elapsed.TotalSeconds:N1}s, {errors.Count:N0} rejected");
-
-            foreach (var failure in errors.Take(5))
-            {
-                Console.WriteLine($"         line {failure.RawRowNumber}: {failure.Message}");
-            }
-
-            if (errors.Count > 5)
-            {
-                Console.WriteLine($"         ... and {errors.Count - 5:N0} more " +
-                                  "(all of them are in stg.ParseError)");
-            }
-
-            await runs.CompleteStepAsync(step.RunStepId, result.RowsWritten, null, null)
-                .ConfigureAwait(false);
-
-            IEnumerable<StagingRecord> Records()
-            {
-                var record = new StagingRecord { DatasetId = dataset.DatasetId, LoadRunId = runId };
-
-                foreach (var row in reader.Read(file))
-                {
-                    if (parser.TryParse(row, record, businessDate, out var failure))
-                    {
-                        yield return record;
-                        continue;
-                    }
-
-                    errors.Add(failure!);
-
-                    // E4: a wrong-format file would otherwise produce one error
-                    // per source row, each carrying its raw line.
-                    if (errors.Count > format.MaxParseErrors)
-                    {
-                        throw new InvalidOperationException(
-                            $"{dataset.Code}: parse errors exceeded MaxParseErrors " +
-                            $"({format.MaxParseErrors}), so the file is being treated as the " +
-                            $"wrong format. First problem at line {failure!.RawRowNumber}: " +
-                            failure.Message);
-                    }
-                }
-            }
+            Console.WriteLine($"         line {failure.RawRowNumber}: {failure.Message}");
         }
-        catch (Exception ex) when (ex is SqlException or InvalidOperationException or IOException)
+
+        if (outcome.Errors.Count > 5)
         {
-            await runs.FailStepAsync(step.RunStepId, ex.Message).ConfigureAwait(false);
-            throw;
+            Console.WriteLine($"         ... and {outcome.Errors.Count - 5:N0} more " +
+                              "(all of them are in stg.ParseError)");
         }
     }
 

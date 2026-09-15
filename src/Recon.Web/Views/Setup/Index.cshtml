@@ -1,0 +1,496 @@
+@inject Microsoft.AspNetCore.Antiforgery.IAntiforgery Xsrf
+@{
+    var status = (InstallStatus)ViewData["Status"]!;
+    var platform = (PlatformConfiguration)ViewData["Platform"]!;
+    var user = (string)ViewData["User"]!;
+
+    var step = !status.Configured || !status.ServerReachable ? 1
+        : !status.Ready ? 2
+        : status.Counts.IsEmpty ? 3
+        : 4;
+
+    string Mark(int n) => step > n ? "bi-check-circle-fill text-success"
+        : step == n ? "bi-record-circle text-primary"
+        : "bi-circle text-muted";
+}
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+    <h1 class="h4 mb-0">Setup</h1>
+    <span class="rc-help">signed in as @user</span>
+</div>
+
+@*
+    This screen exists because every other answer to "where is the database"
+    needs somebody with a shell on the server.
+*@
+<div class="rc-card mb-3">
+    <div class="p-3">
+        <div class="d-flex flex-wrap gap-4 small">
+            <span><i class="bi @Mark(1)" aria-hidden="true"></i> 1 · Point at a server</span>
+            <span><i class="bi @Mark(2)" aria-hidden="true"></i> 2 · Build the database</span>
+            <span><i class="bi @Mark(3)" aria-hidden="true"></i> 3 · Put something in it</span>
+            <span><i class="bi @Mark(4)" aria-hidden="true"></i> 4 · Use it</span>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3">
+    <div class="col-xl-7">
+        @* ---- step 1 ------------------------------------------------ *@
+        <div class="rc-card mb-3">
+            <div class="rc-card-head">
+                <h2>1 · The database</h2>
+                @if (status.Configured && status.ServerReachable)
+                {
+                    <span class="badge text-bg-success">connected</span>
+                }
+                else if (status.Configured)
+                {
+                    <span class="badge text-bg-danger">unreachable</span>
+                }
+                else
+                {
+                    <span class="badge text-bg-secondary">not set</span>
+                }
+            </div>
+            <div class="p-3">
+                @if (platform.IsFromHost)
+                {
+                    @*
+                        A connection string injected by the host is the
+                        deployment saying where the truth lives, and the portal
+                        does not argue with it.
+                    *@
+                    <div class="alert alert-info small mb-3">
+                        The connection string comes from the host's configuration
+                        (<code>ConnectionStrings:Recon</code>), so this screen shows it rather than
+                        offering to change it. Remove that setting to manage the connection here.
+                        <div class="rc-mono mt-2">@PlatformConfiguration.Redact(platform.ConnectionString)</div>
+                    </div>
+                }
+                else
+                {
+                    <form asp-action="Save" method="post" class="row g-3" id="rc-connection-form">
+                        <div class="col-md-7">
+                            <label class="form-label" for="server">Server</label>
+                            <input class="form-control" id="server" name="server" required
+                                   value="@(platform.ServerName ?? "localhost")"
+                                   placeholder="localhost\SQLEXPRESS, or 127.0.0.1,1433">
+                            <div class="form-text">
+                                A named instance is <code>HOST\INSTANCE</code>; a port is
+                                <code>HOST,1433</code>.
+                            </div>
+                        </div>
+                        <div class="col-md-5">
+                            <label class="form-label" for="database">Database</label>
+                            <input class="form-control" id="database" name="database" required
+                                   value="@(platform.DatabaseName ?? "ReconPlatform")">
+                            <div class="form-text">Created for you if it does not exist.</div>
+                        </div>
+
+                        <div class="col-12">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="integratedSecurity"
+                                       name="integratedSecurity" value="true" checked>
+                                <input type="hidden" name="integratedSecurity" value="false">
+                                <label class="form-check-label" for="integratedSecurity">
+                                    <strong>Windows authentication</strong> — the account this portal
+                                    runs as. No password is stored anywhere.
+                                </label>
+                            </div>
+                        </div>
+
+                        <div class="col-md-6 rc-sql-auth">
+                            <label class="form-label" for="userId">SQL login</label>
+                            <input class="form-control" id="userId" name="userId" autocomplete="off">
+                        </div>
+                        <div class="col-md-6 rc-sql-auth">
+                            <label class="form-label" for="password">Password</label>
+                            <input class="form-control" type="password" id="password" name="password"
+                                   autocomplete="new-password">
+                            @*
+                                Said plainly rather than left to be discovered:
+                                a single-node deployment with no secret store
+                                keeps this in a file.
+                            *@
+                            <div class="form-text text-warning">
+                                Stored in plain text in <code>@platform.SettingsPath</code>, readable
+                                only by this account. Windows authentication avoids that entirely.
+                            </div>
+                        </div>
+
+                        <div class="col-md-6">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="encrypt"
+                                       name="encrypt" value="true" checked>
+                                <input type="hidden" name="encrypt" value="false">
+                                <label class="form-check-label" for="encrypt">Encrypt the connection</label>
+                            </div>
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="trustServerCertificate"
+                                       name="trustServerCertificate" value="true" checked>
+                                <input type="hidden" name="trustServerCertificate" value="false">
+                                <label class="form-check-label" for="trustServerCertificate">
+                                    Trust the server certificate
+                                </label>
+                                <div class="form-text">
+                                    Needed for a self-signed certificate, which a local SQL Server
+                                    has by default. Turn it off once the server has a real one.
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label" for="storageRoot">File storage</label>
+                            <input class="form-control" id="storageRoot" name="storageRoot"
+                                   value="@platform.StorageRoot">
+                            <div class="form-text">
+                                Where uploaded files are kept. Originals live on the filesystem with
+                                their hash, never as database blobs.
+                            </div>
+                        </div>
+
+                        <div class="col-12 d-flex gap-2">
+                            <button class="btn btn-primary" type="submit">Save</button>
+                            <button class="btn btn-outline-secondary" type="button" id="rc-test">
+                                Test connection
+                            </button>
+                        </div>
+                        <div class="col-12" id="rc-test-result"></div>
+                    </form>
+                }
+            </div>
+        </div>
+
+        @* ---- step 2 ------------------------------------------------ *@
+        <div class="rc-card mb-3">
+            <div class="rc-card-head">
+                <h2>2 · The schema</h2>
+                @if (status.Ready)
+                {
+                    <span class="badge text-bg-success">installed</span>
+                }
+                else if (status.DatabaseExists && status.MissingObjects.Count > 0
+                         && status.TableCount > 0)
+                {
+                    <span class="badge text-bg-warning">
+                        @status.MissingObjects.Count object(s) missing
+                    </span>
+                }
+                else if (status.DatabaseExists)
+                {
+                    <span class="badge text-bg-warning">incomplete</span>
+                }
+                else
+                {
+                    <span class="badge text-bg-secondary">no database</span>
+                }
+            </div>
+            <div class="rc-table-scroll">
+                <table class="table rc-table align-middle mb-0">
+                    <thead>
+                        <tr><th>Script</th><th>State</th><th>Applied</th><th>By</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var script in status.Scripts)
+                        {
+                            <tr>
+                                <td class="rc-mono">
+                                    @script.Name
+                                    @if (script.Optional)
+                                    {
+                                        <span class="badge text-bg-light border">optional</span>
+                                    }
+                                </td>
+                                <td>
+                                    @if (!script.Present)
+                                    {
+                                        <span class="badge text-bg-danger">missing from the deployment</span>
+                                    }
+                                    else if (script.Changed)
+                                    {
+                                        @*
+                                            Reported, not acted on: re-running a
+                                            consolidated schema over live tables
+                                            is not an upgrade path.
+                                        *@
+                                        <span class="badge text-bg-warning">changed since it was applied</span>
+                                    }
+                                    else if (script.Applied)
+                                    {
+                                        <span class="badge text-bg-success">applied</span>
+                                    }
+                                    else if (script.AppliedElsewhere)
+                                    {
+                                        @* The objects are there; this portal
+                                           simply did not put them there. *@
+                                        <span class="badge text-bg-info">applied outside the portal</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="badge text-bg-secondary">pending</span>
+                                    }
+                                </td>
+                                <td class="rc-mono rc-help">
+                                    @(script.AppliedAt?.ToString("yyyy-MM-dd HH:mm") ?? "—")
+                                </td>
+                                <td class="rc-help">@(script.AppliedBy ?? "—")</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <div class="p-3 border-top">
+                @if (!status.Configured)
+                {
+                    <div class="rc-help">Save a connection first.</div>
+                }
+                else if (!status.ServerReachable)
+                {
+                    <div class="alert alert-danger small mb-0">
+                        <strong>The server did not answer.</strong>
+                        <div class="rc-mono mt-1">@status.Message</div>
+                    </div>
+                }
+                else if (status.SchemaUnrecorded)
+                {
+                    <div class="alert alert-info small">
+                        <strong>The schema is complete</strong>, but this portal has no record of
+                        applying it — it was built by the test harness, the demo script, a DBA
+                        running the same four files, or a restored backup. The portal works
+                        normally; recording it just makes the ledger true about what is in the
+                        database. It is marked <em>adopted</em>, because the portal did not run
+                        these files and cannot know that the text it holds is the text that was
+                        applied.
+                    </div>
+                    <form asp-action="Adopt" method="post" class="d-flex gap-2 align-items-center">
+                        <button class="btn btn-outline-secondary" type="submit">
+                            Record the current scripts as applied
+                        </button>
+                    </form>
+                }
+                else
+                {
+                    <form asp-action="Install" method="post" class="d-flex gap-2 align-items-center">
+                        <button class="btn @(status.Ready ? "btn-outline-secondary" : "btn-primary")"
+                                type="submit"
+                                data-rc-confirm="Create the database if it is missing and apply the pending schema scripts?">
+                            @(status.DatabaseExists ? "Apply pending scripts" : "Create the database and install")
+                        </button>
+                        <span class="rc-help">
+                            Each script is recorded with the hash of its text, so this button is safe
+                            to press twice: what is already applied is not applied again.
+                        </span>
+                    </form>
+                }
+            </div>
+        </div>
+
+        @* ---- step 3 ------------------------------------------------ *@
+        @if (status.Ready)
+        {
+            <div class="rc-card mb-3">
+                <div class="rc-card-head">
+                    <h2>3 · Something to work with</h2>
+                    @if (!status.Counts.IsEmpty)
+                    {
+                        <span class="badge text-bg-success">configured</span>
+                    }
+                </div>
+                <div class="p-3">
+                    <div class="row g-3 mb-3 small">
+                        <div class="col-6 col-md-2">
+                            <div class="rc-tile-label">Counterparties</div>
+                            <div class="rc-tile-value" style="font-size:18px">@status.Counts.Counterparties</div>
+                        </div>
+                        <div class="col-6 col-md-2">
+                            <div class="rc-tile-label">Datasets</div>
+                            <div class="rc-tile-value" style="font-size:18px">@status.Counts.Datasets</div>
+                        </div>
+                        <div class="col-6 col-md-2">
+                            <div class="rc-tile-label">Definitions</div>
+                            <div class="rc-tile-value" style="font-size:18px">@status.Counts.Definitions</div>
+                        </div>
+                        <div class="col-6 col-md-2">
+                            <div class="rc-tile-label">Grants</div>
+                            <div class="rc-tile-value" style="font-size:18px">@status.Counts.Grants</div>
+                        </div>
+                        <div class="col-6 col-md-2">
+                            <div class="rc-tile-label">Runs</div>
+                            <div class="rc-tile-value" style="font-size:18px">@status.Counts.Runs</div>
+                        </div>
+                        <div class="col-6 col-md-2">
+                            <div class="rc-tile-label">Settings</div>
+                            <div class="rc-tile-value" style="font-size:18px">@status.Counts.Settings</div>
+                        </div>
+                    </div>
+
+                    <div class="d-flex gap-2 flex-wrap">
+                        <form asp-action="Demo" method="post" class="m-0">
+                            <button class="btn @(status.Counts.IsEmpty ? "btn-primary" : "btn-outline-secondary")"
+                                    type="submit"
+                                    data-rc-confirm="Load the demo configuration? It replaces its own rows if it has been loaded before.">
+                                Load the demo configuration
+                            </button>
+                        </form>
+                        <form asp-action="Claim" method="post" class="m-0">
+                            <button class="btn btn-outline-secondary" type="submit">
+                                Grant me access to unadministered counterparties
+                            </button>
+                        </form>
+                    </div>
+
+                    <div class="rc-help mt-3">
+                        The demo configuration is a complete worked reconciliation — one
+                        counterparty, two datasets with their field registries, a definition with
+                        four ordered passes, classifications, control totals, fee schedules,
+                        reports and three access grants. It is the same file the demo script runs,
+                        and reading it is the fastest way to see what "onboarding a counterparty"
+                        consists of. An empty platform is equally valid: build a counterparty from
+                        the Counterparties screen instead.
+                    </div>
+
+                    @*
+                        Access is scoped per counterparty and a new account holds
+                        nothing — correct, but it also means a fresh install has
+                        nobody who can grant anything. This is how the first
+                        person gets in, and it only ever fills a vacancy.
+                    *@
+                    <div class="rc-help mt-2">
+                        The grant button only ever adds <strong>Configure</strong> where no
+                        Configure grant exists, so it cannot be used to get into a counterparty
+                        somebody already administers.
+                    </div>
+                </div>
+            </div>
+        }
+
+        @* ---- step 4 ------------------------------------------------ *@
+        @if (status.Ready)
+        {
+            <div class="rc-card">
+                <div class="rc-card-head"><h2>4 · Open the portal</h2></div>
+                <div class="p-3 d-flex gap-2 flex-wrap align-items-center">
+                    <a class="btn btn-primary" asp-controller="Home" asp-action="Index">Run dashboard</a>
+                    <a class="btn btn-outline-secondary" asp-controller="Counterparties" asp-action="Index">
+                        Counterparties
+                    </a>
+                    <a class="btn btn-outline-secondary" asp-controller="Runs" asp-action="Index">
+                        Upload files and run
+                    </a>
+                    <span class="rc-help">
+                        You can come back to this screen at any time; it is the only place that
+                        changes where the database is.
+                    </span>
+                </div>
+            </div>
+        }
+    </div>
+
+    @* ---- what this is doing ---------------------------------------- *@
+    <div class="col-xl-5">
+        <div class="rc-card mb-3">
+            <div class="rc-card-head"><h2>What the install does</h2></div>
+            <div class="p-3 small">
+                <ol class="mb-0 ps-3">
+                    <li class="mb-2">
+                        <code>CREATE DATABASE</code> on the named server, if it is not there
+                        already. That statement runs against <code>master</code>, because it
+                        cannot run inside the database it creates.
+                    </li>
+                    <li class="mb-2">
+                        <code>db/01-schema.sql</code> — 38 tables across four schemas, the field
+                        registry, the slot catalogue, monthly partitioning and every
+                        <code>CHECK</code> the engine relies on.
+                    </li>
+                    <li class="mb-2">
+                        <code>db/02-seed.sql</code> — currencies with their minor units, the
+                        storage slot catalogue, and the ten platform settings.
+                    </li>
+                    <li class="mb-2">
+                        <code>db/03-roles.sql</code> — four least-privilege database roles. The
+                        application is never <code>db_owner</code>, and no role anywhere has
+                        <code>UPDATE</code> or <code>DELETE</code> on the audit schema.
+                    </li>
+                    <li>
+                        <code>db/04-database-options.sql</code> —
+                        <code>READ_COMMITTED_SNAPSHOT</code>, so the portal does not block behind a
+                        load inserting two million rows.
+                    </li>
+                </ol>
+            </div>
+        </div>
+
+        <div class="rc-card">
+            <div class="rc-card-head"><h2>This deployment</h2></div>
+            <div class="p-3 small">
+                <dl class="row mb-0">
+                    <dt class="col-5">Settings file</dt>
+                    <dd class="col-7 rc-mono">@platform.SettingsPath</dd>
+
+                    <dt class="col-5">Connection</dt>
+                    <dd class="col-7 rc-mono">
+                        @(status.Configured
+                            ? PlatformConfiguration.Redact(platform.ConnectionString)
+                            : "not set")
+                    </dd>
+
+                    <dt class="col-5">Server</dt>
+                    <dd class="col-7 rc-mono">@(status.ServerVersion ?? "—")</dd>
+
+                    <dt class="col-5">Edition</dt>
+                    <dd class="col-7">@(status.Edition ?? "—")</dd>
+
+                    <dt class="col-5">Login</dt>
+                    <dd class="col-7 rc-mono">@(status.Login ?? "—")</dd>
+
+                    <dt class="col-5">Tables</dt>
+                    <dd class="col-7">
+                        @status.TableCount
+                        @if (status.MissingObjects.Count > 0 && status.DatabaseExists)
+                        {
+                            <div class="rc-help">
+                                missing: @string.Join(", ", status.MissingObjects.Take(4))@(status.MissingObjects.Count > 4 ? $" and {status.MissingObjects.Count - 4} more" : "")
+                            </div>
+                        }
+                    </dd>
+
+                    <dt class="col-5">Snapshot reads</dt>
+                    <dd class="col-7">
+                        @if (status.ReadCommittedSnapshot)
+                        {
+                            <span class="badge text-bg-success">on</span>
+                        }
+                        else
+                        {
+                            <span class="badge text-bg-warning">off</span>
+                        }
+                    </dd>
+
+                    <dt class="col-5">Scheduler</dt>
+                    <dd class="col-7">
+                        @if (platform.SchedulerEnabled)
+                        {
+                            <span class="badge text-bg-success">enabled</span>
+                        }
+                        else
+                        {
+                            <span class="badge text-bg-secondary">disabled</span>
+                        }
+                    </dd>
+
+                    <dt class="col-5">File storage</dt>
+                    <dd class="col-7 rc-mono">@platform.StorageRoot</dd>
+                </dl>
+            </div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+    <script>
+        window.ReconSetup = {
+            testUrl: "@Url.Action("Test")",
+            token: "@Xsrf.GetAndStoreTokens(Context).RequestToken"
+        };
+    </script>
+    <script src="~/js/setup.js"></script>
+}

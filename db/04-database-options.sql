@@ -16,19 +16,28 @@
    so run this during a maintenance window — not on a live loader.
    ===================================================================== */
 
-ALTER DATABASE [ReconPlatform] SET READ_COMMITTED_SNAPSHOT ON WITH ROLLBACK IMMEDIATE;
+/* FIX: the database name was hard-coded, so this script only worked for a
+   database called ReconPlatform — and the demo script had to skip it and
+   repeat the statement with its own name, which is how a "deliberate
+   deployment step" becomes two statements that can disagree. It now applies
+   to whichever database it is run in, so the portal's installer, the test
+   harness and the demo all run the same file. */
+DECLARE @sql NVARCHAR(400) =
+    N'ALTER DATABASE ' + QUOTENAME(DB_NAME())
+    + N' SET READ_COMMITTED_SNAPSHOT ON WITH ROLLBACK IMMEDIATE;';
+EXEC sp_executesql @sql;
 GO
 
 /* Recovery model: BULK_LOGGED makes the sorted SqlBulkCopy into the
    clustered index minimally logged. Confirm with the DBA team against
    the backup and point-in-time-recovery policy before applying. */
--- ALTER DATABASE [ReconPlatform] SET RECOVERY BULK_LOGGED;
+-- ALTER DATABASE [<this database>] SET RECOVERY BULK_LOGGED;
 -- GO
 
 /* Verify:
    SELECT name, is_read_committed_snapshot_on, snapshot_isolation_state_desc,
           recovery_model_desc
-   FROM sys.databases WHERE name = 'ReconPlatform';
+   FROM sys.databases WHERE name = DB_NAME();
 */
 
 

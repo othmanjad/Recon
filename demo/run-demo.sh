@@ -48,15 +48,13 @@ sq -Q "IF DB_ID('$DB') IS NOT NULL BEGIN
        END;
        CREATE DATABASE [$DB];" >/dev/null
 
-for f in 01-schema 02-seed 03-roles; do
+# 04 applies to whichever database it is run in, so the demo runs the same
+# four scripts the portal's installer does rather than repeating one of them.
+for f in 01-schema 02-seed 03-roles 04-database-options; do
     docker cp "$ROOT/db/$f.sql" "$CONTAINER:/tmp/demo-$f.sql" >/dev/null
     sq -d "$DB" -b -i "/tmp/demo-$f.sql" >/dev/null
     echo "  db/$f.sql"
 done
-
-# A5: the portal must not block behind the loader.
-sq -Q "ALTER DATABASE [$DB] SET READ_COMMITTED_SNAPSHOT ON WITH ROLLBACK IMMEDIATE;" >/dev/null
-echo "  READ_COMMITTED_SNAPSHOT on"
 
 # ---------------------------------------------------------------------
 step "Configuration"

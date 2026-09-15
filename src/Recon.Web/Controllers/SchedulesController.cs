@@ -27,7 +27,8 @@ public sealed class SchedulesController(
     Microsoft.Data.SqlClient.SqlConnection connection,
     AccessService access,
     AuditService audit,
-    IConfiguration configuration) : Controller
+    IConfiguration configuration,
+    PlatformConfiguration platform) : Controller
 {
     public async Task<IActionResult> Index()
     {
@@ -44,8 +45,15 @@ public sealed class SchedulesController(
         // Whether the in-process scheduler is actually running. A disabled
         // scheduler with enabled schedules is the failure that looks like
         // nothing at all.
-        ViewData["SchedulerEnabled"] =
+        //
+        // Two switches, because they answer different questions: the host's
+        // setting disables the scheduler for a whole deployment and needs a
+        // restart, and the portal's switch stops it for now — which is what
+        // an operator wants while a problem is being investigated.
+        ViewData["SchedulerEnabledByHost"] =
             configuration.GetValue("Recon:Scheduler:Enabled", defaultValue: true);
+
+        ViewData["SchedulerEnabled"] = platform.SchedulerEnabled;
 
         ViewData["ServerNow"] = DateTime.UtcNow;
         return View();
@@ -288,6 +296,86 @@ public sealed class SchedulesController(
             .ConfigureAwait(false);
 
         TempData["Ok"] = "Alert policy removed.";
+        return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>
+    /// Stops or starts the in-process scheduler, now, without a restart.
+    ///
+    /// <para>
+    /// An operator investigating a bad run needs the schedules to stop firing
+    /// while they work, and "edit a config file and restart the service" is
+    /// not a thing to ask of somebody at 2am. The switch is stored with the
+    /// platform settings and read by the scheduler on every tick.
+    /// </para>
+    /// </summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Scheduler(bool enabled)
+    {
+        var grants = await access.GrantsAsync(User).ConfigureAwait(false);
+
+        if (!grants.Values.Any(l => l >= AccessLevel.Configure))
+        {
+            TempData["Error"] = "Stopping or starting the scheduler requires Configure access.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        platform.SetSchedulerEnabled(enabled);
+
+        await audit.RecordAsync(
+            User, "Scheduler", "in-process",
+            enabled ? AuditAction.Activate : AuditAction.Deactivate,
+            after: new { enabled },
+            notes: enabled ? "Scheduler started from the portal" : "Scheduler stopped from the portal")
+            .ConfigureAwait(false);
+
+        TempData["Ok"] = enabled
+            ? "The scheduler is running again. It picks the change up within a minute."
+            : "The scheduler is stopped. Schedules are stored and will not fire until it is started.";
+
+        return RedirectToAction(nameof(Index));
+    }
+
+    /// <summary>
+    /// Runs the daily housekeeping and the alert detection on demand.
+    ///
+    /// <para>
+    /// The same methods the scheduler calls, so this cannot come to mean
+    /// something different from what the clock does. It reports what it found
+    /// rather than only logging it — an operator pressing a button is asking
+    /// a question.
+    /// </para>
+    /// </summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> Maintenance(CancellationToken cancellationToken)
+    {
+        var grants = await access.GrantsAsync(User, cancellationToken).ConfigureAwait(false);
+
+        if (!grants.Values.Any(l => l >= AccessLevel.Operate))
+        {
+            TempData["Error"] = "Running maintenance requires Operate access.";
+            return RedirectToAction(nameof(Index));
+        }
+
+        var maintenance = new MaintenanceService(connection);
+
+        var housekeeping = await maintenance.HousekeepingAsync(cancellationToken).ConfigureAwait(false);
+        var alerts = await maintenance.RaiseAlertsAsync(cancellationToken).ConfigureAwait(false);
+
+        await audit.RecordAsync(
+            User, "Maintenance", DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture),
+            AuditAction.Execute,
+            after: new { housekeeping, alerts },
+            notes: "Housekeeping run from the portal",
+            cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        TempData["Ok"] = string.Join(" · ", housekeeping)
+            + (alerts.Count == 0
+                ? " · no alert conditions"
+                : " · RAISED: " + string.Join(" · ", alerts));
+
         return RedirectToAction(nameof(Index));
     }
 

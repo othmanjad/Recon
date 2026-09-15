@@ -22,9 +22,19 @@ namespace Recon.Web.Controllers;
 /// implied, so nobody mistakes it for a login.
 /// </para>
 /// </summary>
-public sealed class AccountController(AuditService audit) : Controller
+public sealed class AccountController(
+    IServiceProvider services, Services.PlatformConfiguration platform) : Controller
 {
-    private readonly AuditService _audit = audit ?? throw new ArgumentNullException(nameof(audit));
+    private readonly IServiceProvider _services =
+        services ?? throw new ArgumentNullException(nameof(services));
+
+    // Sign-in has to work on a portal that has no database yet: it is how the
+    // setup screens get a name to write against the install. So the audit
+    // service is resolved lazily rather than injected — asking for one before
+    // there is a connection would throw here, on the one page that must
+    // answer.
+    private readonly Services.PlatformConfiguration _platform =
+        platform ?? throw new ArgumentNullException(nameof(platform));
 
     [HttpGet]
     public IActionResult SignIn(string? returnUrl = null)
@@ -52,9 +62,24 @@ public sealed class AccountController(AuditService audit) : Controller
             CookieAuthenticationDefaults.AuthenticationScheme,
             new ClaimsPrincipal(identity)).ConfigureAwait(false);
 
-        await _audit.RecordAsync(
-            HttpContext.User, "Session", userName.Trim(), AuditAction.Login,
-            notes: "Portal sign-in").ConfigureAwait(false);
+        if (_platform.IsConfigured)
+        {
+            try
+            {
+                var audit = _services.GetRequiredService<AuditService>();
+
+                await audit.RecordAsync(
+                    HttpContext.User, "Session", userName.Trim(), AuditAction.Login,
+                    notes: "Portal sign-in").ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is Microsoft.Data.SqlClient.SqlException
+                                          or PlatformNotConfiguredException)
+            {
+                // A database that is configured but not yet built must not
+                // stop the sign-in that is about to build it. The sign-in is
+                // still recorded the moment the log exists.
+            }
+        }
 
         // Only local redirects: an open redirect here would be a phishing
         // vector off the back of a trusted host.

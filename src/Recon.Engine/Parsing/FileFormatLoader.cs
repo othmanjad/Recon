@@ -1,9 +1,8 @@
 using Microsoft.Data.SqlClient;
 using Recon.Data;
 using Recon.Domain.Configuration;
-using Recon.Engine.Parsing;
 
-namespace Recon.Cli;
+namespace Recon.Engine.Parsing;
 
 /// <summary>
 /// Loads the file format effective for a business date, with its mappings.
@@ -14,7 +13,7 @@ namespace Recon.Cli;
 /// would break every historical re-run, so the date decides.
 /// </para>
 /// </summary>
-internal static class FileFormatLoader
+public static class FileFormatLoader
 {
     public static async Task<FileFormat> LoadAsync(
         SqlConnection connection,
@@ -29,7 +28,7 @@ internal static class FileFormatLoader
             """
             SELECT FileFormatId, FormatType, Version, EffectiveFrom, EffectiveTo,
                    Delimiter, TextQualifier, HasHeader, SkipLeadingLines, SkipTrailingLines,
-                   FileNamePattern, MaxParseErrors
+                   FileNamePattern, MaxParseErrors, RecordPath
             FROM cfg.FileFormatDefinition
             WHERE DatasetId = @dataset
               AND EffectiveFrom <= @date
@@ -50,6 +49,9 @@ internal static class FileFormatLoader
                 SkipTrailing = r.GetInt32(9),
                 FileNamePattern = r.GetNullableString("FileNamePattern"),
                 MaxParseErrors = r.GetInt32(11),
+                // XML and JSON cannot be read without it: the reader would
+                // not know where one record ends and the next begins.
+                RecordPath = r.GetNullableString("RecordPath"),
             },
             c => c.With("@dataset", dataset.DatasetId)
                   .With("@date", businessDate.ToDateTime(TimeOnly.MinValue)),
@@ -95,6 +97,7 @@ internal static class FileFormatLoader
             EffectiveTo = format.EffectiveTo,
             FileNamePattern = format.FileNamePattern,
             MaxParseErrors = format.MaxParseErrors,
+            RecordPath = format.RecordPath,
             Csv = new CsvOptions
             {
                 Delimiter = string.IsNullOrEmpty(format.Delimiter) ? ',' : format.Delimiter[0],

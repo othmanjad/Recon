@@ -76,6 +76,30 @@ public static class Transforms
     /// Rejects a chain that cannot work, at save time rather than at 2 a.m. on
     /// the first production file.
     /// </summary>
+    /// <summary>
+    /// The operations a transform chain may name.
+    ///
+    /// <para>
+    /// Public so that the portal's mapping editor offers exactly these rather
+    /// than a hand-written list beside them — a help text naming
+    /// <c>RegexReplace</c> when the parser knows <c>RegexExtract</c> sends an
+    /// operator to a run that fails.
+    /// </para>
+    /// </summary>
+    public static readonly IReadOnlyList<string> Operations =
+    [
+        "Trim",
+        "Upper",
+        "Lower",
+        "Normalize",
+        "StripWhitespace",
+        "StripNonAlphanumeric",
+        "StripLeadingZeros",
+        "Substring",
+        "RegexExtract",
+        "Replace",
+    ];
+
     public static void Validate(TransformStep step)
     {
         ArgumentNullException.ThrowIfNull(step);

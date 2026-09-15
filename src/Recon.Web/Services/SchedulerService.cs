@@ -35,6 +35,7 @@ namespace Recon.Web.Services;
 public sealed class SchedulerService(
     IServiceScopeFactory scopes,
     IConfiguration configuration,
+    PlatformConfiguration platform,
     ILogger<SchedulerService> logger) : BackgroundService
 {
     private readonly IServiceScopeFactory _scopes =
@@ -42,6 +43,9 @@ public sealed class SchedulerService(
 
     private readonly IConfiguration _configuration =
         configuration ?? throw new ArgumentNullException(nameof(configuration));
+
+    private readonly PlatformConfiguration _platform =
+        platform ?? throw new ArgumentNullException(nameof(platform));
 
     private readonly ILogger<SchedulerService> _log =
         logger ?? throw new ArgumentNullException(nameof(logger));
@@ -56,24 +60,74 @@ public sealed class SchedulerService(
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        // appsettings can switch it off for a whole deployment; the portal's
+        // own switch (PlatformConfiguration) is checked per tick, so an
+        // operator can stop it while a problem is being investigated and
+        // start it again without a restart.
         if (!_configuration.GetValue("Recon:Scheduler:Enabled", defaultValue: true))
         {
-            _log.LogInformation("Scheduler disabled by configuration.");
+            _log.LogInformation("Scheduler disabled by the host's configuration.");
             return;
         }
 
         var pollSeconds = _configuration.GetValue("Recon:Scheduler:PollSeconds", 60);
         _log.LogInformation("Scheduler started, polling every {Seconds}s.", pollSeconds);
 
+        var waiting = false;
+
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                await TickAsync(stoppingToken).ConfigureAwait(false);
+                // A portal nobody has set up yet has no database to poll.
+                // Waiting quietly is right; crash-looping on a connection
+                // error until someone opens /setup is not.
+                if (!_platform.IsConfigured)
+                {
+                    if (!waiting)
+                    {
+                        _log.LogInformation(
+                            "Scheduler is waiting for a database to be configured.");
+                        waiting = true;
+                    }
+                }
+                else if (!_platform.SchedulerEnabled)
+                {
+                    if (!waiting)
+                    {
+                        _log.LogInformation("Scheduler switched off from the portal.");
+                        waiting = true;
+                    }
+                }
+                else
+                {
+                    if (waiting)
+                    {
+                        _log.LogInformation("Scheduler resuming.");
+                        waiting = false;
+                    }
+
+                    await TickAsync(stoppingToken).ConfigureAwait(false);
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
                 break;
+            }
+            catch (SqlException ex) when (ex.Number is 4060 or 911 or 18456)
+            {
+                // The connection string names a database that does not exist
+                // yet, or a login that cannot reach it — the state a portal is
+                // in between saving a connection and pressing install. One
+                // line, not a stack trace every minute.
+                if (!waiting)
+                {
+                    _log.LogInformation(
+                        "Scheduler is waiting for the database to be installed: {Message}",
+                        ex.Message);
+
+                    waiting = true;
+                }
             }
             catch (Exception ex)
             {
@@ -115,7 +169,15 @@ public sealed class SchedulerService(
         await FireDueSchedulesAsync(scope.ServiceProvider, connection, minute, cancellationToken)
             .ConfigureAwait(false);
 
-        await RaiseAlertsAsync(connection, cancellationToken).ConfigureAwait(false);
+        // The same maintenance the portal's buttons run, so "run it now"
+        // and "the scheduler ran it" cannot mean two different things.
+        var maintenance = new MaintenanceService(connection);
+
+        var raised = await maintenance.RaiseAlertsAsync(cancellationToken).ConfigureAwait(false);
+        foreach (var alert in raised)
+        {
+            _log.LogWarning("Alert: {Message}", alert);
+        }
 
         // Housekeeping is daily, not minutely. Running the purge and the
         // partition check every minute would be pure load for no signal.
@@ -123,7 +185,12 @@ public sealed class SchedulerService(
         if (today > _lastHousekeeping)
         {
             _lastHousekeeping = today;
-            await HousekeepingAsync(connection, cancellationToken).ConfigureAwait(false);
+
+            foreach (var line in await maintenance.HousekeepingAsync(cancellationToken)
+                .ConfigureAwait(false))
+            {
+                _log.LogInformation("Housekeeping: {Line}", line);
+            }
         }
     }
 
@@ -256,89 +323,6 @@ public sealed class SchedulerService(
         {
             await runs.ReleaseRunLockAsync(definitionId, businessDate, null, cancellationToken)
                 .ConfigureAwait(false);
-        }
-    }
-
-    private static async Task RaiseAlertsAsync(
-        SqlConnection connection, CancellationToken cancellationToken)
-    {
-        var detector = new AlertDetector(connection);
-        var alerts = new AlertService(connection, [new DashboardAlertChannel()]);
-
-        var settings = await new ConfigurationRepository(connection)
-            .LoadSettingsAsync(cancellationToken).ConfigureAwait(false);
-
-        var threshold = settings.TryGetValue("MatchDriftThresholdPct", out var raw)
-            && decimal.TryParse(raw, CultureInfo.InvariantCulture, out var parsed)
-            ? parsed
-            : 15m;
-
-        foreach (var alert in await detector
-            .MatchDistributionDriftAsync(threshold, cancellationToken).ConfigureAwait(false))
-        {
-            await alerts.RaiseAsync(alert, cancellationToken).ConfigureAwait(false);
-        }
-    }
-
-    /// <summary>
-    /// The daily jobs: sandbox purge, partition lookahead, and the retention
-    /// check. Each corresponds to a review item that would otherwise become a
-    /// production incident: E5, E2 and E3.
-    /// </summary>
-    private async Task HousekeepingAsync(SqlConnection connection, CancellationToken cancellationToken)
-    {
-        var settings = await new ConfigurationRepository(connection)
-            .LoadSettingsAsync(cancellationToken).ConfigureAwait(false);
-
-        int Setting(string key, int fallback) =>
-            settings.TryGetValue(key, out var raw)
-                && int.TryParse(raw, CultureInfo.InvariantCulture, out var parsed)
-                ? parsed
-                : fallback;
-
-        // E5: sandbox runs write to production staging. Left alone they would
-        // accumulate 2M rows per experiment.
-        var purgeDays = Setting("SandboxPurgeDays", 7);
-
-        var purged = await Db.ExecuteAsync(
-            connection,
-            """
-            DELETE s FROM stg.StagingTransaction AS s
-            JOIN ops.ReconRun AS r ON r.RunId = s.LoadRunId
-            WHERE r.RunType = 'Sandbox'
-              AND r.StartedAt < DATEADD(DAY, -@days, SYSDATETIME());
-            """,
-            c => c.With("@days", purgeDays),
-            cancellationToken).ConfigureAwait(false);
-
-        if (purged > 0)
-        {
-            _log.LogInformation("Purged {Rows} staged rows from sandbox runs older than {Days} days.",
-                purged, purgeDays);
-        }
-
-        // E2: if no future partition exists at rollover, everything lands in
-        // the last range and the sliding window breaks.
-        var detector = new AlertDetector(connection);
-        var shortage = await detector
-            .PartitionShortageAsync(Setting("FuturePartitionsAlertAt", 2), cancellationToken)
-            .ConfigureAwait(false);
-
-        if (shortage is not null)
-        {
-            await new AlertService(connection, [new DashboardAlertChannel()])
-                .RaiseAsync(shortage, cancellationToken).ConfigureAwait(false);
-        }
-
-        // File-not-received, for yesterday's business date: a session that
-        // never arrived looks identical to one not due yet without this.
-        var yesterday = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(-1));
-        var alerts = new AlertService(connection, [new DashboardAlertChannel()]);
-
-        foreach (var alert in await detector
-            .FileNotReceivedAsync(yesterday, cancellationToken).ConfigureAwait(false))
-        {
-            await alerts.RaiseAsync(alert, cancellationToken).ConfigureAwait(false);
         }
     }
 

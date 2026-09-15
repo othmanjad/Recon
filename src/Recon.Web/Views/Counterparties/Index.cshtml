@@ -294,7 +294,7 @@
                                                 <form asp-action="ActivateDefinition" method="post" class="m-0">
                                                     <input type="hidden" name="counterpartyId" value="@selected.CounterpartyId">
                                                     <input type="hidden" name="definitionId" value="@definition.DefinitionId">
-                                                    <input type="hidden" name="active" value="@(!definition.IsActive)">
+                                                    <input type="hidden" name="active" value="@(definition.IsActive ? "false" : "true")">
                                                     <button class="btn btn-sm @(definition.IsActive ? "btn-outline-secondary" : "btn-outline-primary")"
                                                             type="submit">
                                                         @(definition.IsActive ? "Deactivate" : "Activate")

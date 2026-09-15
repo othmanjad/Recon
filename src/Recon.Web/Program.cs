@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.Data.SqlClient;
+using Recon.Web;
 using Recon.Web.Filters;
 using Recon.Web.Services;
 
@@ -27,17 +28,36 @@ builder.Services.AddControllersWithViews(options =>
 // which is the failure mode an audit log must not have.
 builder.Services.AddHttpContextAccessor();
 
+// ---------------------------------------------------------------------
+// Where the database is, and whether the scheduler runs, are the
+// portal's own settings rather than a file somebody has to edit and then
+// restart. The portal starts with no database at all, asks for one on
+// /setup, tests it, writes it down and carries on — a connection string
+// supplied by the host (ConnectionStrings:Recon) still wins and is never
+// overwritten.
+// ---------------------------------------------------------------------
+builder.Services.AddSingleton<PlatformConfiguration>();
+builder.Services.AddSingleton<DatabaseInstaller>();
+
 // A scoped connection per request. Each request is one unit of work, and
 // the engine's repositories take a connection rather than a factory so
 // that a run and its steps share one session — which the application lock
 // depends on, since sp_getapplock is session-scoped.
-builder.Services.AddScoped(_ =>
+//
+// It resolves the connection string at the moment it is needed instead of
+// at startup: throwing here would mean an unconfigured portal could not
+// start, and a portal that cannot start cannot show the screen that
+// configures it.
+builder.Services.AddScoped(services =>
 {
-    var connectionString = builder.Configuration.GetConnectionString("Recon")
-        ?? throw new InvalidOperationException(
-            "ConnectionStrings:Recon is not configured. The portal cannot start without a database.");
+    var platform = services.GetRequiredService<PlatformConfiguration>();
 
-    var connection = new SqlConnection(connectionString);
+    if (!platform.IsConfigured)
+    {
+        throw new PlatformNotConfiguredException();
+    }
+
+    var connection = new SqlConnection(platform.ConnectionString);
     connection.Open();
     return connection;
 });
@@ -49,11 +69,13 @@ builder.Services.AddScoped<AccessService>();
 builder.Services.AddScoped<PortalQueries>();
 builder.Services.AddScoped<ReportService>();
 builder.Services.AddScoped<SandboxService>();
+builder.Services.AddScoped<SessionRunner>();
 
 // The scheduler. Runs in-process for a single-node deployment; the
 // application lock in RunRepository is what makes it safe to run more
 // than one node, because the second node's attempt is refused rather
-// than duplicated (review item B2).
+// than duplicated (review item B2). It waits for a configured database
+// rather than crash-looping on a portal nobody has set up yet.
 builder.Services.AddHostedService<SchedulerService>();
 
 // Development authentication only: a cookie naming the operator, so the
@@ -88,6 +110,14 @@ app.UseStaticFiles();
 app.UseRouting();
 app.UseAuthentication();
 app.UseAuthorization();
+
+// ---------------------------------------------------------------------
+// Everything else redirects to /setup until there is a database with a
+// schema in it. Without this, a fresh install answers every screen with
+// a connection error, which tells the operator nothing about what to do
+// next.
+// ---------------------------------------------------------------------
+app.UseSetupGuard();
 
 app.MapControllerRoute("default", "{controller=Home}/{action=Index}/{id?}");
 

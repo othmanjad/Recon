@@ -6,4 +6,20 @@
   <ItemGroup>
     <ProjectReference Include="../Recon.Engine/Recon.Engine.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <!-- The schema ships WITH the portal, because the portal builds its own
+         database: the setup screen creates it and applies these scripts. They
+         are the same files db/tests/run.sh and demo/run-demo.sh run, not a
+         copy — the csproj links them so there is one definition of the schema
+         in the repository. Non-recursive on purpose: db/superseded/ is history
+         and must never be applied. -->
+    <Content Include="../../db/*.sql" LinkBase="db" CopyToOutputDirectory="PreserveNewest" />
+
+    <!-- The demo configuration and its two session files, so a fresh install
+         has something to look at and the upload path has something to upload.
+         Nothing in the engine or the portal reads these at run time unless an
+         operator asks for them from the setup screen. -->
+    <Content Include="../../demo/01-demo-config.sql" LinkBase="demo" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="../../demo/files/*.csv" LinkBase="demo/files" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
 </Project>

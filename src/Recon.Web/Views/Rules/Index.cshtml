@@ -1,4 +1,5 @@
 @using Recon.Domain.Configuration
+@using Recon.Web.Controllers
 @using Recon.Web.Services
 @inject Microsoft.AspNetCore.Antiforgery.IAntiforgery Xsrf
 @{
@@ -6,6 +7,10 @@
     var definition = ViewData["Selected"] as ReconciliationDefinition;
     var problems = (IReadOnlyList<string>)ViewData["Problems"]!;
     var replayable = ViewData["Replayable"] as List<SandboxSource> ?? [];
+    var canConfigure = ViewData["CanConfigure"] is true;
+    var exclusions = (List<ExclusionRow>)ViewData["Exclusions"]!;
+    var classifications = (List<ClassificationRow>)ViewData["Classifications"]!;
+    var controlTotals = (List<ControlTotalRow2>)ViewData["ControlTotals"]!;
 
     object Fields(Dataset dataset) => dataset.Fields
         .OrderBy(f => f.DisplayOrder)
@@ -346,6 +351,543 @@ else
                 </span>
             </div>
         </form>
+    </div>
+
+    @* ---------------------------------------------------------------
+        The three rule sets the engine reads beside the passes. They were
+        SQL-only, which meant a definition could be built in the portal and
+        still needed a developer to decide what an unmatched row is called
+        and whether the money adds up.
+       --------------------------------------------------------------- *@
+    <div class="rc-card mt-4">
+        <div class="rc-card-head">
+            <h2>Exclusions</h2>
+            <span class="rc-help">rows that must never enter matching</span>
+        </div>
+        <div class="rc-table-scroll">
+            <table class="table rc-table align-middle mb-0">
+                <thead>
+                    <tr><th>Dataset</th><th>Name</th><th>Condition</th><th>Reason</th><th>Status</th><th></th></tr>
+                </thead>
+                <tbody>
+                    @if (exclusions.Count == 0)
+                    {
+                        <tr>
+                            <td colspan="6" class="rc-empty">
+                                None. Every staged row enters matching, which is correct unless the
+                                source sends rows that were never meant to match — a rejected
+                                transaction, for instance.
+                            </td>
+                        </tr>
+                    }
+                    @foreach (var rule in exclusions)
+                    {
+                        <tr>
+                            <td class="rc-mono">@rule.DatasetCode</td>
+                            <td>@rule.Name</td>
+                            <td class="rc-mono rc-help" style="max-width:320px">@rule.ConditionJson</td>
+                            <td class="rc-mono">@rule.ReasonCode</td>
+                            <td>
+                                @if (rule.IsActive)
+                                {
+                                    <span class="badge text-bg-success">Active</span>
+                                }
+                                else
+                                {
+                                    <span class="badge text-bg-secondary">Inactive</span>
+                                }
+                            </td>
+                            <td class="text-end">
+                                @if (canConfigure)
+                                {
+                                    <div class="d-flex gap-1 justify-content-end">
+                                        <button class="btn btn-sm btn-outline-secondary rc-exclusion-edit"
+                                                type="button"
+                                                data-id="@rule.ExclusionRuleId"
+                                                data-dataset="@rule.DatasetId"
+                                                data-name="@rule.Name"
+                                                data-json="@rule.ConditionJson"
+                                                data-reason="@rule.ReasonCode"
+                                                data-active="@rule.IsActive.ToString().ToLowerInvariant()">
+                                            Edit
+                                        </button>
+                                        <form asp-action="DeleteExclusion" method="post" class="m-0">
+                                            <input type="hidden" name="definitionId" value="@definition.DefinitionId">
+                                            <input type="hidden" name="exclusionRuleId" value="@rule.ExclusionRuleId">
+                                            <button class="btn btn-sm btn-outline-danger" type="submit"
+                                                    data-rc-confirm="Remove the exclusion '@rule.Name'?">
+                                                Remove
+                                            </button>
+                                        </form>
+                                    </div>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        @if (canConfigure)
+        {
+            <div class="p-3 border-top">
+                <form asp-action="SaveExclusion" method="post" class="row g-2 align-items-end"
+                      id="rc-exclusion-form">
+                    <input type="hidden" name="definitionId" value="@definition.DefinitionId">
+                    <input type="hidden" name="exclusionRuleId" id="exclusionRuleId">
+                    <div class="col-md-2">
+                        <label class="form-label" for="exDataset">Dataset</label>
+                        <select class="form-select form-select-sm" id="exDataset" name="datasetId">
+                            <option value="@definition.Left.DatasetId">@definition.Left.Code</option>
+                            <option value="@definition.Right.DatasetId">@definition.Right.Code</option>
+                        </select>
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" for="exName">Name</label>
+                        <input class="form-control form-control-sm" id="exName" name="name" required
+                               placeholder="Rejected by the scheme">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" for="exReason">Reason code</label>
+                        <input class="form-control form-control-sm rc-mono" id="exReason"
+                               name="reasonCode" required placeholder="REJECTED">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label" for="exJson">Condition</label>
+                        <input class="form-control form-control-sm rc-mono" id="exJson"
+                               name="conditionJson" required
+                               placeholder='{"op":"and","items":[{"field":"STATUS","cmp":"eq","value":"RJCT"}]}'>
+                    </div>
+                    <div class="col-md-1 d-flex align-items-end">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="exActive"
+                                   name="isActive" value="true" checked>
+                            <input type="hidden" name="isActive" value="false">
+                            <label class="form-check-label" for="exActive">On</label>
+                        </div>
+                    </div>
+                    <div class="col-12 d-flex gap-2">
+                        <button class="btn btn-sm btn-primary" type="submit">Save exclusion</button>
+                        <button class="btn btn-sm btn-outline-secondary" type="button"
+                                id="rc-exclusion-reset">New</button>
+                        <span class="rc-help align-self-center">
+                            Validated against that dataset's registry on save. An excluded row
+                            raises no exception: a rejected transaction is not a break, and
+                            treating it as one buries the real ones.
+                        </span>
+                    </div>
+                </form>
+            </div>
+        }
+    </div>
+
+    <div class="rc-card mt-3">
+        <div class="rc-card-head">
+            <h2>Classifications</h2>
+            <span class="rc-help">what an unmatched row is called — first matching rule wins</span>
+        </div>
+        <div class="rc-table-scroll">
+            <table class="table rc-table align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th class="text-end">#</th><th>Code</th><th>Name</th><th>Side</th>
+                        <th>Condition</th><th>Severity</th><th>Action</th><th>Status</th><th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (classifications.Count == 0)
+                    {
+                        <tr>
+                            <td colspan="9" class="rc-empty">
+                                None. Unmatched rows stay unmatched and raise no exception — which
+                                is correct: an exception code the configuration never named would
+                                be invented.
+                            </td>
+                        </tr>
+                    }
+                    @foreach (var rule in classifications)
+                    {
+                        <tr>
+                            <td class="rc-num">@rule.Sequence</td>
+                            <td class="rc-mono">@rule.ExceptionCode</td>
+                            <td>@rule.DisplayName</td>
+                            <td class="rc-help">@rule.AppliesToSide</td>
+                            <td class="rc-mono rc-help" style="max-width:280px">@rule.ConditionJson</td>
+                            <td>
+                                @{
+                                    var tone = rule.Severity switch
+                                    {
+                                        "Critical" => "danger",
+                                        "High" => "warning",
+                                        "Normal" => "info",
+                                        _ => "light",
+                                    };
+                                }
+                                <span class="badge text-bg-@tone @(tone == "light" ? "border" : null)">
+                                    @rule.Severity
+                                </span>
+                            </td>
+                            <td class="rc-help">@rule.ActionType</td>
+                            <td>
+                                @if (rule.IsActive)
+                                {
+                                    <span class="badge text-bg-success">Active</span>
+                                }
+                                else
+                                {
+                                    <span class="badge text-bg-secondary">Inactive</span>
+                                }
+                            </td>
+                            <td class="text-end">
+                                @if (canConfigure)
+                                {
+                                    <div class="d-flex gap-1 justify-content-end">
+                                        <button class="btn btn-sm btn-outline-secondary rc-classification-edit"
+                                                type="button"
+                                                data-id="@rule.ClassificationRuleId"
+                                                data-code="@rule.ExceptionCode"
+                                                data-label="@rule.DisplayName"
+                                                data-side="@rule.AppliesToSide"
+                                                data-json="@rule.ConditionJson"
+                                                data-action="@rule.ActionType"
+                                                data-severity="@rule.Severity"
+                                                data-seq="@rule.Sequence"
+                                                data-active="@rule.IsActive.ToString().ToLowerInvariant()">
+                                            Edit
+                                        </button>
+                                        <form asp-action="DeleteClassification" method="post" class="m-0">
+                                            <input type="hidden" name="definitionId" value="@definition.DefinitionId">
+                                            <input type="hidden" name="classificationRuleId" value="@rule.ClassificationRuleId">
+                                            <button class="btn btn-sm btn-outline-danger" type="submit"
+                                                    data-rc-confirm="Remove @rule.ExceptionCode? Exceptions already raised under it are kept.">
+                                                Remove
+                                            </button>
+                                        </form>
+                                    </div>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        @if (canConfigure)
+        {
+            <div class="p-3 border-top">
+                <form asp-action="SaveClassification" method="post" class="row g-2 align-items-end"
+                      id="rc-classification-form">
+                    <input type="hidden" name="definitionId" value="@definition.DefinitionId">
+                    <input type="hidden" name="classificationRuleId" id="classificationRuleId">
+                    <div class="col-md-2">
+                        <label class="form-label" for="clCode">Exception code</label>
+                        <input class="form-control form-control-sm rc-mono" id="clCode"
+                               name="exceptionCode" required placeholder="MISSING_IN_LEDGER">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" for="clName">Name</label>
+                        <input class="form-control form-control-sm" id="clName" name="displayName"
+                               required placeholder="In the statement, not in the ledger">
+                    </div>
+                    <div class="col-md-1">
+                        <label class="form-label" for="clSide">Side</label>
+                        <select class="form-select form-select-sm" id="clSide" name="appliesToSide">
+                            <option value="Left">Left</option>
+                            <option value="Right">Right</option>
+                            <option value="Both">Both</option>
+                        </select>
+                    </div>
+                    <div class="col-md-1">
+                        <label class="form-label" for="clSeq">Seq</label>
+                        <input class="form-control form-control-sm" type="number" id="clSeq"
+                               name="sequence" min="1" required
+                               value="@(classifications.Count == 0 ? 1 : classifications.Max(c => c.Sequence) + 1)">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" for="clSeverity">Severity</label>
+                        <select class="form-select form-select-sm" id="clSeverity" name="severity">
+                            <option value="Low">Low</option>
+                            <option value="Normal" selected>Normal</option>
+                            <option value="High">High</option>
+                            <option value="Critical">Critical</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" for="clAction">Action</label>
+                        <select class="form-select form-select-sm" id="clAction" name="actionType">
+                            <option value="ReportOnly" selected>ReportOnly</option>
+                            <option value="AutoClose">AutoClose</option>
+                            <option value="AutoPost">AutoPost (not implemented)</option>
+                        </select>
+                    </div>
+                    <div class="col-md-1 d-flex align-items-end">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="clActive"
+                                   name="isActive" value="true" checked>
+                            <input type="hidden" name="isActive" value="false">
+                            <label class="form-check-label" for="clActive">On</label>
+                        </div>
+                    </div>
+                    <div class="col-12">
+                        <label class="form-label" for="clJson">Condition</label>
+                        <input class="form-control form-control-sm rc-mono" id="clJson"
+                               name="conditionJson" required
+                               placeholder='{"op":"and","items":[{"field":"DIRECTION","cmp":"eq","value":"Inward"}]}'>
+                        @*
+                            A rule for both sides has to resolve against both
+                            registries, and the two sides name nothing alike.
+                        *@
+                        <div class="form-text">
+                            Validated on save against the side's registry — and against
+                            <strong>both</strong> when the side is Both, because a condition on the
+                            left's field names is not one the right can evaluate.
+                        </div>
+                    </div>
+                    <div class="col-12 d-flex gap-2">
+                        <button class="btn btn-sm btn-primary" type="submit">Save classification</button>
+                        <button class="btn btn-sm btn-outline-secondary" type="button"
+                                id="rc-classification-reset">New</button>
+                    </div>
+                </form>
+            </div>
+        }
+    </div>
+
+    <div class="rc-card mt-3">
+        <div class="rc-card-head">
+            <h2>Control totals</h2>
+            <span class="rc-help">a fully matched run that does not balance is a failed run</span>
+        </div>
+        <div class="rc-table-scroll">
+            <table class="table rc-table align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>Check</th><th>A</th><th>B</th><th>Scope</th>
+                        <th class="text-end">Tolerance</th><th>On mismatch</th><th>Status</th><th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (controlTotals.Count == 0)
+                    {
+                        <tr>
+                            <td colspan="8" class="rc-empty">
+                                None. The run will report matched and unmatched counts and prove
+                                nothing about the money — the balance proof is what makes those
+                                counts trustworthy.
+                            </td>
+                        </tr>
+                    }
+                    @foreach (var check in controlTotals)
+                    {
+                        <tr>
+                            <td>
+                                <div class="rc-mono">@check.CheckCode</div>
+                                <div class="rc-help">@check.DisplayName</div>
+                            </td>
+                            <td class="rc-mono rc-help" style="max-width:220px">
+                                @check.SourceTypeA<br>@check.SourceAJson
+                            </td>
+                            <td class="rc-mono rc-help" style="max-width:220px">
+                                @check.SourceTypeB<br>@check.SourceBJson
+                            </td>
+                            <td>
+                                @check.Scope
+                                @if (check.PeriodDays is { } days)
+                                {
+                                    <span class="rc-help">@days d</span>
+                                }
+                            </td>
+                            <td class="rc-num">@Fmt.Count(check.ToleranceMinor)</td>
+                            <td>
+                                @if (check.FailRunOnMismatch)
+                                {
+                                    <span class="badge text-bg-danger">fails the run</span>
+                                }
+                                else
+                                {
+                                    <span class="badge text-bg-warning">reported</span>
+                                }
+                            </td>
+                            <td>
+                                @if (check.IsActive)
+                                {
+                                    <span class="badge text-bg-success">Active</span>
+                                }
+                                else
+                                {
+                                    <span class="badge text-bg-secondary">Inactive</span>
+                                }
+                            </td>
+                            <td class="text-end">
+                                @if (canConfigure)
+                                {
+                                    <div class="d-flex gap-1 justify-content-end">
+                                        @if (!check.HasResults)
+                                        {
+                                            <form asp-action="DeleteControlTotal" method="post" class="m-0">
+                                                <input type="hidden" name="definitionId" value="@definition.DefinitionId">
+                                                <input type="hidden" name="controlTotalId" value="@check.ControlTotalId">
+                                                <button class="btn btn-sm btn-outline-danger" type="submit"
+                                                        data-rc-confirm="Remove @check.CheckCode?">Remove</button>
+                                            </form>
+                                        }
+                                        else
+                                        {
+                                            <span class="rc-help align-self-center"
+                                                  title="A past run's balance proof references this check">
+                                                has results
+                                            </span>
+                                        }
+                                    </div>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+
+        @if (canConfigure)
+        {
+            <div class="p-3 border-top">
+                <form asp-action="SaveControlTotal" method="post" class="row g-2 align-items-end">
+                    <input type="hidden" name="definitionId" value="@definition.DefinitionId">
+                    <div class="col-md-2">
+                        <label class="form-label" for="ctCode">Check code</label>
+                        <input class="form-control form-control-sm rc-mono" id="ctCode"
+                               name="checkCode" required placeholder="MATCHED_TOTAL">
+                    </div>
+                    <div class="col-md-3">
+                        <label class="form-label" for="ctName">Name</label>
+                        <input class="form-control form-control-sm" id="ctName" name="displayName"
+                               required placeholder="Matched value agrees">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" for="ctScope">Scope</label>
+                        <select class="form-select form-select-sm" id="ctScope" name="scope">
+                            <option value="Run" selected>Run</option>
+                            <option value="BusinessDate">BusinessDate</option>
+                            <option value="Period">Period</option>
+                        </select>
+                    </div>
+                    <div class="col-md-1">
+                        <label class="form-label" for="ctPeriod">Days</label>
+                        <input class="form-control form-control-sm" type="number" id="ctPeriod"
+                               name="periodDays" min="1" placeholder="—">
+                        <div class="form-text">Period only.</div>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label" for="ctTolerance">Tolerance (minor)</label>
+                        <input class="form-control form-control-sm" type="number" id="ctTolerance"
+                               name="toleranceMinor" value="0" min="0" required>
+                        <div class="form-text">0 is exact.</div>
+                    </div>
+                    <div class="col-md-2 d-flex align-items-end gap-2">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="ctFails"
+                                   name="failRunOnMismatch" value="true" checked>
+                            <input type="hidden" name="failRunOnMismatch" value="false">
+                            <label class="form-check-label" for="ctFails">Fails the run</label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="ctActive"
+                                   name="isActive" value="true" checked>
+                            <input type="hidden" name="isActive" value="false">
+                            <label class="form-check-label" for="ctActive">On</label>
+                        </div>
+                    </div>
+
+                    @* Two aggregates, built from parts rather than typed as
+                       JSON — and compiled before they are stored. *@
+                    <div class="col-md-6">
+                        <div class="rc-tile-label mb-2">Side A</div>
+                        <div class="row g-2">
+                            <div class="col-4">
+                                <label class="form-label" for="functionA">Function</label>
+                                <select class="form-select form-select-sm" id="functionA" name="functionA">
+                                    <option value="SumAmount" selected>SumAmount</option>
+                                    <option value="Count">Count</option>
+                                </select>
+                            </div>
+                            <div class="col-4">
+                                <label class="form-label" for="sourceTypeA">Source</label>
+                                <select class="form-select form-select-sm" id="sourceTypeA" name="sourceTypeA">
+                                    @foreach (var source in Enum.GetNames<ControlTotalSource>())
+                                    {
+                                        <option value="@source" selected="@(source == "Staging")">@source</option>
+                                    }
+                                </select>
+                            </div>
+                            <div class="col-2">
+                                <label class="form-label" for="sideA">Side</label>
+                                <select class="form-select form-select-sm" id="sideA" name="sideA">
+                                    <option value="Left" selected>Left</option>
+                                    <option value="Right">Right</option>
+                                </select>
+                            </div>
+                            <div class="col-2">
+                                <label class="form-label" for="matchStatusA">Status</label>
+                                <select class="form-select form-select-sm" id="matchStatusA" name="matchStatusA">
+                                    <option value="">any</option>
+                                    @foreach (var status in Enum.GetNames<MatchStatus>())
+                                    {
+                                        <option value="@status">@status</option>
+                                    }
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="rc-tile-label mb-2">Side B</div>
+                        <div class="row g-2">
+                            <div class="col-4">
+                                <label class="form-label" for="functionB">Function</label>
+                                <select class="form-select form-select-sm" id="functionB" name="functionB">
+                                    <option value="SumAmount" selected>SumAmount</option>
+                                    <option value="Count">Count</option>
+                                </select>
+                            </div>
+                            <div class="col-4">
+                                <label class="form-label" for="sourceTypeB">Source</label>
+                                <select class="form-select form-select-sm" id="sourceTypeB" name="sourceTypeB">
+                                    @foreach (var source in Enum.GetNames<ControlTotalSource>())
+                                    {
+                                        <option value="@source" selected="@(source == "Staging")">@source</option>
+                                    }
+                                </select>
+                            </div>
+                            <div class="col-2">
+                                <label class="form-label" for="sideB">Side</label>
+                                <select class="form-select form-select-sm" id="sideB" name="sideB">
+                                    <option value="Left">Left</option>
+                                    <option value="Right" selected>Right</option>
+                                </select>
+                            </div>
+                            <div class="col-2">
+                                <label class="form-label" for="matchStatusB">Status</label>
+                                <select class="form-select form-select-sm" id="matchStatusB" name="matchStatusB">
+                                    <option value="">any</option>
+                                    @foreach (var status in Enum.GetNames<MatchStatus>())
+                                    {
+                                        <option value="@status">@status</option>
+                                    }
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="col-12 d-flex gap-2">
+                        <button class="btn btn-sm btn-primary" type="submit">Save control total</button>
+                        <span class="rc-help align-self-center">
+                            The check is compiled before it is stored: one that cannot compile fails
+                            the run it was added to protect. A period-scoped check must read
+                            <code>RunAggregate</code> — it is the source that survives the staging
+                            purge.
+                        </span>
+                    </div>
+                </form>
+            </div>
+        }
     </div>
 
     <div class="row g-3 mt-2">

@@ -25,13 +25,19 @@ public sealed class CounterpartiesController(
     AccessService access,
     AuditService audit) : Controller
 {
-    public async Task<IActionResult> Index(int? id)
+    /// <summary>
+    /// <paramref name="blank"/> means "no counterparty selected", so that the
+    /// editor is a create form rather than an edit of whichever counterparty
+    /// happened to be first. Without it a second counterparty could not be
+    /// created from the portal.
+    /// </summary>
+    public async Task<IActionResult> Index(int? id, bool blank = false)
     {
         ViewData["Title"] = "Counterparties";
 
         var grants = await access.GrantsAsync(User).ConfigureAwait(false);
         var counterparties = await queries.CounterpartiesAsync(User).ConfigureAwait(false);
-        var selectedId = id ?? counterparties.FirstOrDefault()?.CounterpartyId;
+        var selectedId = blank ? null : id ?? counterparties.FirstOrDefault()?.CounterpartyId;
 
         CounterpartyRow? selected = null;
         if (selectedId is { } counterpartyId)
@@ -107,17 +113,23 @@ public sealed class CounterpartiesController(
 
         try
         {
+            // CreatedBy is NOT NULL with no default, and omitting it made
+            // creating a counterparty from the portal impossible — the first
+            // step of onboarding, refused by the database every time. Found
+            // by a driver that onboards one end to end; nothing else had
+            // pressed this button.
             var id = await Db.ScalarAsync<int>(
                 connection,
                 """
-                INSERT cfg.Counterparty (Code, Name, Description, IsActive)
-                VALUES (@code, @name, @description, @active);
+                INSERT cfg.Counterparty (Code, Name, Description, IsActive, CreatedBy)
+                VALUES (@code, @name, @description, @active, @by);
                 SELECT CAST(SCOPE_IDENTITY() AS INT);
                 """,
                 c => c.With("@code", code?.Trim())
                       .With("@name", name?.Trim())
                       .With("@description", string.IsNullOrWhiteSpace(description) ? null : description.Trim())
-                      .With("@active", isActive)).ConfigureAwait(false);
+                      .With("@active", isActive)
+                      .With("@by", access.UserName(User))).ConfigureAwait(false);
 
             await Db.ExecuteAsync(
                 connection,
@@ -224,8 +236,8 @@ public sealed class CounterpartiesController(
                     """
                     INSERT cfg.ReconciliationDefinition
                         (CounterpartyId, Code, Name, LeftDatasetId, RightDatasetId,
-                         MatchingWindowDaysBefore, MatchingWindowDaysAfter, IsActive)
-                    VALUES (@cp, @code, @name, @left, @right, @before, @after, 0);
+                         MatchingWindowDaysBefore, MatchingWindowDaysAfter, IsActive, CreatedBy)
+                    VALUES (@cp, @code, @name, @left, @right, @before, @after, 0, @by);
                     SELECT CAST(SCOPE_IDENTITY() AS INT);
                     """,
                     Bind(null)).ConfigureAwait(false);
@@ -257,7 +269,8 @@ public sealed class CounterpartiesController(
                    .With("@left", leftDatasetId)
                    .With("@right", rightDatasetId)
                    .With("@before", windowBefore)
-                   .With("@after", windowAfter);
+                   .With("@after", windowAfter)
+                   .With("@by", access.UserName(User));
         };
     }
 

@@ -409,7 +409,10 @@ else
             <h2>@(selectedRow is null ? "Add a dataset" : "Edit " + selectedRow.Code)</h2>
             @if (selectedRow is not null)
             {
-                <a class="btn btn-sm btn-outline-secondary" asp-action="Index">New dataset</a>
+                @* blank=true, not just "no id": without it the screen falls
+                   back to the first dataset and the form is an edit of that. *@
+                <a class="btn btn-sm btn-outline-secondary"
+                   asp-action="Index" asp-route-blank="true">New dataset</a>
             }
         </div>
         <div class="p-3">

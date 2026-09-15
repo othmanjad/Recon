@@ -19,12 +19,18 @@ public sealed class DatasetsController(
     AccessService access,
     AuditService audit) : Controller
 {
-    public async Task<IActionResult> Index(int? id, int? formatId)
+    /// <summary>
+    /// The dataset screen. <paramref name="blank"/> means "no dataset
+    /// selected": without it, the editor always carried the first dataset's
+    /// id and a second dataset could not be created from the portal at all —
+    /// every save was an edit of whichever dataset happened to be first.
+    /// </summary>
+    public async Task<IActionResult> Index(int? id, int? formatId, bool blank = false)
     {
         ViewData["Title"] = "Datasets & fields";
 
         var datasets = await queries.DatasetsAsync(User).ConfigureAwait(false);
-        var selectedId = id ?? datasets.FirstOrDefault()?.DatasetId;
+        var selectedId = blank ? null : id ?? datasets.FirstOrDefault()?.DatasetId;
 
         Dataset? selected = null;
         if (selectedId is { } datasetId && datasets.Any(d => d.DatasetId == datasetId))
@@ -97,8 +103,7 @@ public sealed class DatasetsController(
         string providerType,
         string timeZone,
         string? defaultCurrency,
-        string? duplicateKeyFields,
-        string? description)
+        string? duplicateKeyFields)
     {
         await access.RequireAsync(User, counterpartyId, AccessLevel.Configure).ConfigureAwait(false);
 
@@ -131,7 +136,7 @@ public sealed class DatasetsController(
                     connection,
                     """
                     UPDATE cfg.Dataset
-                    SET Code = @code, Name = @name, Description = @description,
+                    SET Code = @code, Name = @name,
                         ProviderType = @provider, TimeZone = @zone,
                         DefaultCurrency = @currency, DuplicateKeyFields = @dupKey
                     WHERE DatasetId = @id;
@@ -149,9 +154,9 @@ public sealed class DatasetsController(
                 connection,
                 """
                 INSERT cfg.Dataset
-                    (CounterpartyId, Code, Name, Description, ProviderType, TimeZone,
+                    (CounterpartyId, Code, Name, ProviderType, TimeZone,
                      DefaultCurrency, DuplicateKeyFields, IsActive, CreatedBy)
-                VALUES (@cp, @code, @name, @description, @provider, @zone,
+                VALUES (@cp, @code, @name, @provider, @zone,
                         @currency, @dupKey, 0, @by);
                 SELECT CAST(SCOPE_IDENTITY() AS INT);
                 """,
@@ -182,7 +187,6 @@ public sealed class DatasetsController(
             command.With("@cp", counterpartyId)
                    .With("@code", code?.Trim())
                    .With("@name", name?.Trim())
-                   .With("@description", string.IsNullOrWhiteSpace(description) ? null : description.Trim())
                    .With("@provider", providerType)
                    .With("@zone", string.IsNullOrWhiteSpace(timeZone) ? "Asia/Amman" : timeZone.Trim())
                    .With("@currency", string.IsNullOrWhiteSpace(defaultCurrency) ? null : defaultCurrency)

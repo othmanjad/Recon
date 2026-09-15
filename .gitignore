@@ -3,3 +3,5 @@ obj/
 node_modules/
 .shots/
 *.user
+src/Recon.Web/files/
+recon.settings.json

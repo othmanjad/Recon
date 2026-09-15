@@ -129,11 +129,38 @@ Worth opening, in this order:
    local and 19:00 UTC. A server that fired "22:00" in its own zone would
    reconcile the wrong business date.
 
+### Onboard a second counterparty yourself
+
+This is the design's own measure of whether the platform was built, and it
+needs no SQL:
+
+1. **Counterparties → New counterparty.** Creating one grants you Configure
+   access to it, or you could not see what you had just made.
+2. **Datasets & fields → New dataset**, twice — one per side. Each is created
+   inactive and empty.
+3. Add each dataset's **field registry**: a code, a label, a type, a role and
+   a storage slot. The five universal roles (Reference, Amount, Currency,
+   Date, Direction) are what activation checks, because control totals,
+   partitioning and fee logic all read them.
+4. Add a **file format** and its **field mappings** — where in the file each
+   registry field comes from. Formats are effective-dated, so a layout change
+   later is a new version rather than an edit.
+5. **Activate** both datasets. The gate refuses until the roles are there.
+6. **Counterparties → Add or edit a definition**: pair the two datasets and
+   set the matching window.
+7. **Rule builder**: add a pass, and the exclusions, classifications and
+   control totals. Every field comes from a registry dropdown; a condition
+   naming a field outside it is refused.
+8. **Activate** the definition, then **Runs → Upload a session and reconcile
+   it**.
+
 To check the portal rather than look at it:
 
 ```bash
 cd tests/browser && npm install
-node drive-portal.js            # 115 assertions in a real browser
+node drive-portal.js            # every screen, three access levels
+node drive-setup.js             # from no database to a reconciled run
+node drive-onboard.js           # the sequence above, asserted end to end
 ```
 
 ## Things worth trying next

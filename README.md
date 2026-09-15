@@ -90,7 +90,7 @@ exception.**
 |------|-------|
 | Design document | v1.0, reviewed twice |
 | Database schema | Complete, consolidated, and **executed** — 38 tables, built on SQL Server 2022 with 88 passing tests |
-| Portal | Complete: thirteen screens in ASP.NET Core MVC against the real database, including its own setup wizard — it creates and installs its database itself. Driven in Chromium by two suites |
+| Portal | Complete: thirteen screens in ASP.NET Core MVC against the real database, including its own setup wizard — it creates and installs its database itself. Every step of onboarding a counterparty is a screen, and three browser suites drive it |
 | Engine (.NET) | Phases 1–7 complete — matching, reporting, fees and interchange, scheduling and alerting, XML and JSON sources. 175 tests, and the 2M-row spike meets every budget |
 | End to end | `dotnet run --project src/Recon.Web` against any SQL Server, or `./demo/run-demo.sh` then `./demo/run-portal.sh` with Docker |
 
@@ -153,6 +153,18 @@ Driving the first-run path found the one that would have met every new user:
 screen that has to answer on an unconfigured portal took a service whose
 constructor needs a connection, so every request to it was a 500 — a portal
 that could not be set up from the screen that sets it up.
+
+Driving the **onboarding** path — create a counterparty, two datasets, their
+registries, formats, mappings, a definition, a pass, rules, then upload two
+files and reconcile them — found the two that made the Phase 3 exit criterion
+unmeetable from the portal:
+
+- **Creating a counterparty was refused by the database every time**:
+  `CreatedBy` is `NOT NULL` and the insert omitted it. The first step of
+  onboarding, and nothing had ever pressed that button.
+- **A second counterparty or dataset could not be created at all.** The create
+  forms carried the currently selected row's id, so every save was an edit of
+  whichever one happened to be first.
 
 **The engine is executed too**, including against volume. 165 unit tests, 10
 integration tests against a live server, and the Phase 1 spike at 2,000,000

@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Recon.Data;
 using Recon.Domain.Conditions;
 using Recon.Domain.Configuration;
+using Recon.Engine.Sql;
 using Recon.Web.Services;
 
 namespace Recon.Web.Controllers;
@@ -47,8 +48,598 @@ public sealed class RulesController(
         ViewData["Selected"] = definition;
         ViewData["Problems"] = definition?.ActivationProblems() ?? [];
 
+        ViewData["CanConfigure"] = definition is not null
+            && grants.TryGetValue(definition.CounterpartyId, out var level)
+            && level >= AccessLevel.Configure;
+
+        // Loaded here rather than from the definition, which carries only the
+        // ACTIVE rules — the engine has no use for the others, but an editor
+        // that could not show a deactivated rule could not re-activate one
+        // either.
+        ViewData["Exclusions"] = definition is null
+            ? new List<ExclusionRow>()
+            : await ExclusionsAsync(definition).ConfigureAwait(false);
+
+        ViewData["Classifications"] = definition is null
+            ? new List<ClassificationRow>()
+            : await ClassificationsAsync(definition.DefinitionId).ConfigureAwait(false);
+
+        ViewData["ControlTotals"] = definition is null
+            ? new List<ControlTotalRow2>()
+            : await ControlTotalsAsync(definition.DefinitionId).ConfigureAwait(false);
+
         return View();
     }
+
+    private Task<List<ExclusionRow>> ExclusionsAsync(ReconciliationDefinition definition) =>
+        Db.QueryAsync(
+            connection,
+            """
+            SELECT e.ExclusionRuleId, e.DatasetId, d.Code, e.Name, e.ConditionJson,
+                   e.ReasonCode, e.IsActive
+            FROM cfg.ExclusionRule AS e
+            JOIN cfg.Dataset AS d ON d.DatasetId = e.DatasetId
+            WHERE e.DatasetId IN (@left, @right)
+            ORDER BY d.Code, e.Name;
+            """,
+            r => new ExclusionRow
+            {
+                ExclusionRuleId = r.GetInt32(0),
+                DatasetId = r.GetInt32(1),
+                DatasetCode = r.GetString(2),
+                Name = r.GetString(3),
+                ConditionJson = r.GetString(4),
+                ReasonCode = r.GetString(5),
+                IsActive = r.GetBoolean(6),
+            },
+            c => c.With("@left", definition.Left.DatasetId)
+                  .With("@right", definition.Right.DatasetId));
+
+    private Task<List<ClassificationRow>> ClassificationsAsync(int definitionId) =>
+        Db.QueryAsync(
+            connection,
+            """
+            SELECT ClassificationRuleId, ExceptionCode, DisplayName, AppliesToSide,
+                   ConditionJson, ActionType, Severity, Sequence, IsActive
+            FROM cfg.ClassificationRule
+            WHERE DefinitionId = @def
+            ORDER BY Sequence;
+            """,
+            r => new ClassificationRow
+            {
+                ClassificationRuleId = r.GetInt32(0),
+                ExceptionCode = r.GetString(1),
+                DisplayName = r.GetString(2),
+                AppliesToSide = r.GetString(3),
+                ConditionJson = r.GetString(4),
+                ActionType = r.GetString(5),
+                Severity = r.GetString(6),
+                Sequence = r.GetInt32(7),
+                IsActive = r.GetBoolean(8),
+            },
+            c => c.With("@def", definitionId));
+
+    private Task<List<ControlTotalRow2>> ControlTotalsAsync(int definitionId) =>
+        Db.QueryAsync(
+            connection,
+            """
+            SELECT c.ControlTotalId, c.CheckCode, c.DisplayName,
+                   c.SourceAExpressionJson, c.SourceBExpressionJson,
+                   c.Scope, c.SourceTypeA, c.SourceTypeB, c.PeriodDays,
+                   c.ToleranceMinor, c.FailRunOnMismatch, c.IsActive,
+                   CASE WHEN EXISTS (SELECT 1 FROM ops.ControlTotalResult AS r
+                                     WHERE r.ControlTotalId = c.ControlTotalId)
+                        THEN 1 ELSE 0 END
+            FROM cfg.ControlTotalDefinition AS c
+            WHERE c.DefinitionId = @def
+            ORDER BY c.CheckCode;
+            """,
+            r => new ControlTotalRow2
+            {
+                ControlTotalId = r.GetInt32(0),
+                CheckCode = r.GetString(1),
+                DisplayName = r.GetString(2),
+                SourceAJson = r.GetString(3),
+                SourceBJson = r.GetString(4),
+                Scope = r.GetString(5),
+                SourceTypeA = r.GetString(6),
+                SourceTypeB = r.GetString(7),
+                PeriodDays = r.GetNullableInt32("PeriodDays"),
+                ToleranceMinor = r.GetInt64(9),
+                FailRunOnMismatch = r.GetBoolean(10),
+                IsActive = r.GetBoolean(11),
+                HasResults = r.GetInt32(12) == 1,
+            },
+            c => c.With("@def", definitionId));
+
+    /// <summary>
+    /// Saves an exclusion rule: rows that must never enter matching.
+    ///
+    /// <para>
+    /// They leave the working set before pass 1 and are reported separately.
+    /// They never generate exceptions — a transaction the scheme rejected is
+    /// not a break, and treating it as one buries the real ones.
+    /// </para>
+    /// </summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> SaveExclusion(
+        int definitionId,
+        int datasetId,
+        int? exclusionRuleId,
+        string name,
+        string conditionJson,
+        string reasonCode,
+        bool isActive)
+    {
+        var definition = await config.LoadDefinitionAsync(definitionId).ConfigureAwait(false);
+        await access.RequireAsync(User, definition.CounterpartyId, AccessLevel.Configure)
+            .ConfigureAwait(false);
+
+        var dataset = definition.Left.DatasetId == datasetId ? definition.Left
+            : definition.Right.DatasetId == datasetId ? definition.Right
+            : null;
+
+        if (dataset is null)
+        {
+            TempData["Error"] = "That dataset is not one of this definition's two sides.";
+            return RedirectToAction(nameof(Index), new { id = definitionId });
+        }
+
+        // The same gate the rule builder applies: the condition resolves
+        // against that dataset's registry and never from free text.
+        var result = ConditionValidator.ValidateJson(conditionJson, dataset);
+
+        if (!result.IsValid)
+        {
+            TempData["Error"] = "The exclusion condition was rejected: "
+                + string.Join("; ", result.Errors);
+
+            return RedirectToAction(nameof(Index), new { id = definitionId });
+        }
+
+        try
+        {
+            if (exclusionRuleId is { } existing)
+            {
+                await Db.ExecuteAsync(
+                    connection,
+                    """
+                    UPDATE cfg.ExclusionRule
+                    SET DatasetId = @ds, Name = @name, ConditionJson = @json,
+                        ReasonCode = @reason, IsActive = @active
+                    WHERE ExclusionRuleId = @id;
+                    """,
+                    c => c.With("@id", existing)
+                          .With("@ds", datasetId)
+                          .With("@name", name?.Trim())
+                          .With("@json", conditionJson)
+                          .With("@reason", reasonCode?.Trim())
+                          .With("@active", isActive)).ConfigureAwait(false);
+
+                await audit.RecordAsync(User, "ExclusionRule", existing, AuditAction.Update,
+                    after: new { datasetId, name, reasonCode, isActive }).ConfigureAwait(false);
+            }
+            else
+            {
+                var id = await Db.ScalarAsync<int>(
+                    connection,
+                    """
+                    INSERT cfg.ExclusionRule (DatasetId, Name, ConditionJson, ReasonCode, IsActive)
+                    VALUES (@ds, @name, @json, @reason, @active);
+                    SELECT CAST(SCOPE_IDENTITY() AS INT);
+                    """,
+                    c => c.With("@ds", datasetId)
+                          .With("@name", name?.Trim())
+                          .With("@json", conditionJson)
+                          .With("@reason", reasonCode?.Trim())
+                          .With("@active", isActive)).ConfigureAwait(false);
+
+                await audit.RecordAsync(User, "ExclusionRule", id, AuditAction.Create,
+                    after: new { datasetId, name, reasonCode }).ConfigureAwait(false);
+            }
+
+            TempData["Ok"] = $"Exclusion '{name}' saved, and it resolves against {dataset.Code}.";
+        }
+        catch (Microsoft.Data.SqlClient.SqlException ex)
+        {
+            TempData["Error"] = "The database refused this exclusion: " + ex.Message;
+        }
+
+        return RedirectToAction(nameof(Index), new { id = definitionId });
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> DeleteExclusion(int definitionId, int exclusionRuleId)
+    {
+        var definition = await config.LoadDefinitionAsync(definitionId).ConfigureAwait(false);
+        await access.RequireAsync(User, definition.CounterpartyId, AccessLevel.Configure)
+            .ConfigureAwait(false);
+
+        await Db.ExecuteAsync(
+            connection, "DELETE cfg.ExclusionRule WHERE ExclusionRuleId = @id;",
+            c => c.With("@id", exclusionRuleId)).ConfigureAwait(false);
+
+        await audit.RecordAsync(User, "ExclusionRule", exclusionRuleId, AuditAction.Delete)
+            .ConfigureAwait(false);
+
+        TempData["Ok"] = "Exclusion removed.";
+        return RedirectToAction(nameof(Index), new { id = definitionId });
+    }
+
+    /// <summary>
+    /// Saves a classification rule: what an unmatched row is called, and how
+    /// serious it is.
+    ///
+    /// <para>
+    /// First matching rule wins, in sequence, per side. Without any rules an
+    /// unmatched row stays unmatched and raises no exception — which is
+    /// correct: an exception code the configuration never named would be
+    /// invented.
+    /// </para>
+    /// </summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> SaveClassification(
+        int definitionId,
+        int? classificationRuleId,
+        string exceptionCode,
+        string displayName,
+        string appliesToSide,
+        string conditionJson,
+        string actionType,
+        string severity,
+        int sequence,
+        bool isActive)
+    {
+        var definition = await config.LoadDefinitionAsync(definitionId).ConfigureAwait(false);
+        await access.RequireAsync(User, definition.CounterpartyId, AccessLevel.Configure)
+            .ConfigureAwait(false);
+
+        // A rule that applies to both sides has to resolve against both
+        // registries, and the two sides name nothing alike: a condition on
+        // the left's STATUS is not a condition the right can evaluate. This
+        // is where that is found out, rather than in the run.
+        var datasets = appliesToSide switch
+        {
+            "Left" => new[] { definition.Left },
+            "Right" => [definition.Right],
+            _ => [definition.Left, definition.Right],
+        };
+
+        foreach (var dataset in datasets)
+        {
+            var check = ConditionValidator.ValidateJson(conditionJson, dataset);
+
+            if (!check.IsValid)
+            {
+                TempData["Error"] =
+                    $"The condition was rejected against {dataset.Code}: "
+                    + string.Join("; ", check.Errors)
+                    + (appliesToSide == "Both"
+                        ? " — a rule that applies to both sides must resolve against both registries."
+                        : string.Empty);
+
+                return RedirectToAction(nameof(Index), new { id = definitionId });
+            }
+        }
+
+        if (actionType == "AutoPost")
+        {
+            TempData["Error"] =
+                "AutoPost is a seam for future Failed Inward posting and is not implemented. A " +
+                "rule that claimed to post would report an outcome nothing produced.";
+
+            return RedirectToAction(nameof(Index), new { id = definitionId });
+        }
+
+        try
+        {
+            if (classificationRuleId is { } existing)
+            {
+                await Db.ExecuteAsync(
+                    connection,
+                    """
+                    UPDATE cfg.ClassificationRule
+                    SET ExceptionCode = @code, DisplayName = @label, AppliesToSide = @side,
+                        ConditionJson = @json, ActionType = @action, Severity = @severity,
+                        Sequence = @seq, IsActive = @active
+                    WHERE ClassificationRuleId = @id;
+                    """,
+                    BindClassification(existing)).ConfigureAwait(false);
+
+                await audit.RecordAsync(User, "ClassificationRule", existing, AuditAction.Update,
+                    after: new { exceptionCode, appliesToSide, sequence, severity }).ConfigureAwait(false);
+            }
+            else
+            {
+                var id = await Db.ScalarAsync<int>(
+                    connection,
+                    """
+                    INSERT cfg.ClassificationRule
+                        (DefinitionId, ExceptionCode, DisplayName, AppliesToSide, ConditionJson,
+                         ActionType, Severity, Sequence, IsActive)
+                    VALUES (@def, @code, @label, @side, @json, @action, @severity, @seq, @active);
+                    SELECT CAST(SCOPE_IDENTITY() AS INT);
+                    """,
+                    BindClassification(null)).ConfigureAwait(false);
+
+                await audit.RecordAsync(User, "ClassificationRule", id, AuditAction.Create,
+                    after: new { exceptionCode, appliesToSide, sequence }).ConfigureAwait(false);
+            }
+
+            TempData["Ok"] = $"Classification {exceptionCode} saved at sequence {sequence}.";
+        }
+        catch (Microsoft.Data.SqlClient.SqlException ex)
+        {
+            // Most likely the unique constraint on (definition, sequence):
+            // two rules cannot share a position, or which one wins would
+            // depend on the read order.
+            TempData["Error"] = "The database refused this classification: " + ex.Message;
+        }
+
+        return RedirectToAction(nameof(Index), new { id = definitionId });
+
+        Action<Microsoft.Data.SqlClient.SqlCommand> BindClassification(int? id) => command =>
+        {
+            if (id is { } value)
+            {
+                command.With("@id", value);
+            }
+
+            command.With("@def", definitionId)
+                   .With("@code", exceptionCode?.Trim())
+                   .With("@label", displayName?.Trim())
+                   .With("@side", appliesToSide)
+                   .With("@json", conditionJson)
+                   .With("@action", actionType)
+                   .With("@severity", severity)
+                   .With("@seq", sequence)
+                   .With("@active", isActive);
+        };
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> DeleteClassification(int definitionId, int classificationRuleId)
+    {
+        var definition = await config.LoadDefinitionAsync(definitionId).ConfigureAwait(false);
+        await access.RequireAsync(User, definition.CounterpartyId, AccessLevel.Configure)
+            .ConfigureAwait(false);
+
+        await Db.ExecuteAsync(
+            connection, "DELETE cfg.ClassificationRule WHERE ClassificationRuleId = @id;",
+            c => c.With("@id", classificationRuleId)).ConfigureAwait(false);
+
+        await audit.RecordAsync(User, "ClassificationRule", classificationRuleId, AuditAction.Delete)
+            .ConfigureAwait(false);
+
+        TempData["Ok"] = "Classification removed.";
+        return RedirectToAction(nameof(Index), new { id = definitionId });
+    }
+
+    /// <summary>
+    /// Saves a control total: two aggregates that must agree.
+    ///
+    /// <para>
+    /// Built from parts rather than typed as JSON, and then compiled straight
+    /// away: a check that cannot compile is a check that fails the run it was
+    /// added to protect, and finding that out here costs a message instead of
+    /// a night.
+    /// </para>
+    ///
+    /// <para>
+    /// A non-zero difference on a failing check <b>fails the run</b>, however
+    /// many rows matched. That is the design's position and this form says so:
+    /// the alternative is a reconciliation that reports success while the
+    /// money does not add up.
+    /// </para>
+    /// </summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> SaveControlTotal(
+        int definitionId,
+        int? controlTotalId,
+        string checkCode,
+        string displayName,
+        string functionA,
+        string sourceTypeA,
+        string sideA,
+        string? matchStatusA,
+        string functionB,
+        string sourceTypeB,
+        string sideB,
+        string? matchStatusB,
+        string scope,
+        int? periodDays,
+        long toleranceMinor,
+        bool failRunOnMismatch,
+        bool isActive)
+    {
+        var definition = await config.LoadDefinitionAsync(definitionId).ConfigureAwait(false);
+        await access.RequireAsync(User, definition.CounterpartyId, AccessLevel.Configure)
+            .ConfigureAwait(false);
+
+        if (scope == "Period" && (periodDays is null || periodDays <= 0))
+        {
+            TempData["Error"] = "A period-scoped check needs a window in days.";
+            return RedirectToAction(nameof(Index), new { id = definitionId });
+        }
+
+        var specA = BuildSpec(definition, functionA, sideA, matchStatusA);
+        var specB = BuildSpec(definition, functionB, sideB, matchStatusB);
+
+        var check = new ControlTotalDefinition
+        {
+            ControlTotalId = controlTotalId ?? 0,
+            CheckCode = checkCode?.Trim() ?? string.Empty,
+            DisplayName = displayName?.Trim() ?? string.Empty,
+            SourceA = specA,
+            SourceB = specB,
+            Scope = Db.ParseEnum<ControlTotalScope>(scope),
+            SourceTypeA = Db.ParseEnum<ControlTotalSource>(sourceTypeA),
+            SourceTypeB = Db.ParseEnum<ControlTotalSource>(sourceTypeB),
+            PeriodDays = periodDays,
+            ToleranceMinor = toleranceMinor,
+            FailRunOnMismatch = failRunOnMismatch,
+            IsActive = isActive,
+        };
+
+        // Compiled before it is stored. A check that cannot compile is worse
+        // than no check: it fails the run it was added to protect.
+        try
+        {
+            var businessDate = DateOnly.FromDateTime(DateTime.Today);
+            var (from, to) = definition.WindowFor(businessDate);
+
+            _ = Recon.Engine.Totals.ControlTotalEvaluator.Compile(
+                check, definition, runId: 0, stagingRunId: 0, businessDate, from, to);
+        }
+        catch (SqlCompilationException ex)
+        {
+            TempData["Error"] = "That check does not compile: " + ex.Message;
+            return RedirectToAction(nameof(Index), new { id = definitionId });
+        }
+        catch (FieldNotInRegistryException ex)
+        {
+            TempData["Error"] = "That check names a field outside the registry: " + ex.Message;
+            return RedirectToAction(nameof(Index), new { id = definitionId });
+        }
+
+        try
+        {
+            if (controlTotalId is { } existing)
+            {
+                await Db.ExecuteAsync(
+                    connection,
+                    """
+                    UPDATE cfg.ControlTotalDefinition
+                    SET CheckCode = @code, DisplayName = @label,
+                        SourceAExpressionJson = @jsonA, SourceBExpressionJson = @jsonB,
+                        Scope = @scope, SourceTypeA = @typeA, SourceTypeB = @typeB,
+                        PeriodDays = @period, ToleranceMinor = @tolerance,
+                        FailRunOnMismatch = @fails, IsActive = @active
+                    WHERE ControlTotalId = @id;
+                    """,
+                    BindTotal(existing)).ConfigureAwait(false);
+
+                await audit.RecordAsync(User, "ControlTotalDefinition", existing, AuditAction.Update,
+                    after: new { checkCode, scope, failRunOnMismatch }).ConfigureAwait(false);
+            }
+            else
+            {
+                var id = await Db.ScalarAsync<int>(
+                    connection,
+                    """
+                    INSERT cfg.ControlTotalDefinition
+                        (DefinitionId, CheckCode, DisplayName, SourceAExpressionJson,
+                         SourceBExpressionJson, Scope, SourceTypeA, SourceTypeB, PeriodDays,
+                         ToleranceMinor, FailRunOnMismatch, IsActive)
+                    VALUES (@def, @code, @label, @jsonA, @jsonB, @scope, @typeA, @typeB,
+                            @period, @tolerance, @fails, @active);
+                    SELECT CAST(SCOPE_IDENTITY() AS INT);
+                    """,
+                    BindTotal(null)).ConfigureAwait(false);
+
+                await audit.RecordAsync(User, "ControlTotalDefinition", id, AuditAction.Create,
+                    after: new { checkCode, scope, failRunOnMismatch }).ConfigureAwait(false);
+            }
+
+            TempData["Ok"] = $"Control total {checkCode} saved, and it compiles."
+                + (failRunOnMismatch
+                    ? " A difference beyond the tolerance will FAIL the run."
+                    : " A difference is reported and does not fail the run.");
+        }
+        catch (Microsoft.Data.SqlClient.SqlException ex)
+        {
+            TempData["Error"] = "The database refused this check: " + ex.Message;
+        }
+
+        return RedirectToAction(nameof(Index), new { id = definitionId });
+
+        Action<Microsoft.Data.SqlClient.SqlCommand> BindTotal(int? id) => command =>
+        {
+            if (id is { } value)
+            {
+                command.With("@id", value);
+            }
+
+            command.With("@def", definitionId)
+                   .With("@code", check.CheckCode)
+                   .With("@label", check.DisplayName)
+                   .With("@jsonA", AggregateSpecJson.Write(specA))
+                   .With("@jsonB", AggregateSpecJson.Write(specB))
+                   .With("@scope", scope)
+                   .With("@typeA", sourceTypeA)
+                   .With("@typeB", sourceTypeB)
+                   .With("@period", periodDays)
+                   .With("@tolerance", toleranceMinor)
+                   .With("@fails", failRunOnMismatch)
+                   .With("@active", isActive);
+        };
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> DeleteControlTotal(int definitionId, int controlTotalId)
+    {
+        var definition = await config.LoadDefinitionAsync(definitionId).ConfigureAwait(false);
+        await access.RequireAsync(User, definition.CounterpartyId, AccessLevel.Configure)
+            .ConfigureAwait(false);
+
+        // A check that has produced results is kept: ops.ControlTotalResult
+        // references it, and a past run's balance proof must stay
+        // explainable. Deactivating stops it running.
+        var used = await Db.ScalarAsync<int>(
+            connection,
+            """
+            SELECT CASE WHEN EXISTS (SELECT 1 FROM ops.ControlTotalResult WHERE ControlTotalId = @id)
+                        THEN 1 ELSE 0 END;
+            """,
+            c => c.With("@id", controlTotalId)).ConfigureAwait(false);
+
+        if (used == 1)
+        {
+            TempData["Error"] =
+                "This check has produced results, so it cannot be deleted — a past run's balance " +
+                "proof would stop being explainable. Deactivate it instead.";
+
+            return RedirectToAction(nameof(Index), new { id = definitionId });
+        }
+
+        await Db.ExecuteAsync(
+            connection, "DELETE cfg.ControlTotalDefinition WHERE ControlTotalId = @id;",
+            c => c.With("@id", controlTotalId)).ConfigureAwait(false);
+
+        await audit.RecordAsync(User, "ControlTotalDefinition", controlTotalId, AuditAction.Delete)
+            .ConfigureAwait(false);
+
+        TempData["Ok"] = "Check removed.";
+        return RedirectToAction(nameof(Index), new { id = definitionId });
+    }
+
+    /// <summary>
+    /// One side of a control total, from the parts the form collects. The
+    /// dataset is the chosen side's, so a spec never names a dataset outside
+    /// this definition.
+    /// </summary>
+    private static AggregateSpec BuildSpec(
+        ReconciliationDefinition definition, string function, string side, string? matchStatus)
+    {
+        var dataset = side == "Right" ? definition.Right : definition.Left;
+
+        return new AggregateSpec
+        {
+            Function = function,
+            DatasetId = dataset.DatasetId,
+            Side = side == "Right" ? Side.Right : Side.Left,
+            MatchStatus = string.IsNullOrEmpty(matchStatus)
+                ? null
+                : Db.ParseEnum<MatchStatus>(matchStatus),
+        };
+    }
+
 
     /// <summary>
     /// Saves one pass and its conditions.
@@ -389,4 +980,55 @@ public sealed class RulesController(
         public string? Unit { get; init; }
         public required bool UseNormalized { get; init; }
     }
+}
+
+public sealed record ExclusionRow
+{
+    public required int ExclusionRuleId { get; init; }
+    public required int DatasetId { get; init; }
+    public required string DatasetCode { get; init; }
+    public required string Name { get; init; }
+    public required string ConditionJson { get; init; }
+    public required string ReasonCode { get; init; }
+    public required bool IsActive { get; init; }
+}
+
+public sealed record ClassificationRow
+{
+    public required int ClassificationRuleId { get; init; }
+    public required string ExceptionCode { get; init; }
+    public required string DisplayName { get; init; }
+    public required string AppliesToSide { get; init; }
+    public required string ConditionJson { get; init; }
+    public required string ActionType { get; init; }
+    public required string Severity { get; init; }
+    public required int Sequence { get; init; }
+    public required bool IsActive { get; init; }
+}
+
+/// <summary>
+/// A control total as the editor sees it — the definition, not a run's
+/// result. <c>ControlTotalRow</c> is already taken by the run page, which
+/// shows the two values and their difference.
+/// </summary>
+public sealed record ControlTotalRow2
+{
+    public required int ControlTotalId { get; init; }
+    public required string CheckCode { get; init; }
+    public required string DisplayName { get; init; }
+    public required string SourceAJson { get; init; }
+    public required string SourceBJson { get; init; }
+    public required string Scope { get; init; }
+    public required string SourceTypeA { get; init; }
+    public required string SourceTypeB { get; init; }
+    public int? PeriodDays { get; init; }
+    public required long ToleranceMinor { get; init; }
+    public required bool FailRunOnMismatch { get; init; }
+    public required bool IsActive { get; init; }
+
+    /// <summary>
+    /// Whether any run has produced a result for this check. One that has
+    /// cannot be deleted: a past run's balance proof must stay explainable.
+    /// </summary>
+    public required bool HasResults { get; init; }
 }

@@ -113,6 +113,8 @@ There is no step in operating this platform that needs a shell.
 | `demo/01-demo-config.sql` by hand | *Load the demo configuration* |
 | The first grant, inserted by hand | *Grant me access to unadministered counterparties* — it only ever fills a vacancy, so it cannot be used to get into a counterparty somebody already administers |
 | `recon run --left-file … --right-file …` | **Upload a session and reconcile it** on `/runs`: two files in, a reconciled run out |
+| `INSERT cfg.Dataset` / `FileFormatDefinition` / `FieldMapping` | The dataset, format and mapping editors on `/datasets` — a counterparty can be onboarded without SQL |
+| `INSERT cfg.ExclusionRule` / `ClassificationRule` / `ControlTotalDefinition` | The three rule-set editors on `/rules`, each validated through the field registry |
 | `Recon:Scheduler:Enabled` + a restart | *Stop the scheduler* on `/schedules`, effective within a minute |
 | Waiting for the nightly tick | *Run housekeeping and alert checks now* — the same methods the tick calls |
 
@@ -171,7 +173,28 @@ database**, walks the setup wizard, and ends with a reconciled run.
 node tests/browser/drive-setup.js
 ```
 
-It asserts the things that are easy to get wrong once and never notice: a
+`drive-onboard.js` is the third, and it is the design's Phase 3 exit
+criterion as far as software can settle it: it creates a counterparty, two
+datasets, their field registries, a CSV format and its mappings per side, a
+definition, a matching pass, an exclusion, a classification per side and a
+control total, activates all of it, uploads two files it writes itself, and
+asserts the run matched what those files were built to match — with no SQL
+anywhere.
+
+```bash
+node tests/browser/drive-onboard.js
+```
+
+The "unassisted" half of that criterion is about a person and a test cannot
+settle it. What a test can settle is that every step exists as a screen and
+that the result reconciles. It found the two defects that made the answer
+"no": creating a counterparty was refused by the database on every attempt
+(`CreatedBy` is `NOT NULL` and the insert omitted it), and the create forms
+carried the currently selected row's id, so a *second* counterparty or
+dataset could not be created at all — every save was an edit of whichever one
+happened to be first.
+
+`drive-setup.js` asserts the things that are easy to get wrong once and never notice: a
 wrong password is refused with the server's own reason rather than written to
 disk, the saved connection is rendered redacted, the install creates the
 database and reports which scripts it applied, pressing install a second time

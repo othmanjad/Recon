@@ -268,4 +268,60 @@ jQuery(function ($) {
     }
 
     annotateAll();
+
+    /* ---- the three rule sets ---------------------------------------
+       Loading a row into its form rather than making the operator retype
+       a condition tree they can see on the screen above. */
+    $(".rc-exclusion-edit").on("click", function () {
+        var $b = $(this);
+
+        $("#exclusionRuleId").val($b.data("id"));
+        $("#exDataset").val($b.data("dataset"));
+        $("#exName").val($b.data("name"));
+        $("#exJson").val($b.data("json"));
+        $("#exReason").val($b.data("reason"));
+        $("#exActive").prop("checked", $b.data("active") === true || $b.data("active") === "true");
+    });
+
+    $("#rc-exclusion-reset").on("click", function () {
+        $("#rc-exclusion-form")[0].reset();
+        $("#exclusionRuleId").val("");
+    });
+
+    $(".rc-classification-edit").on("click", function () {
+        var $b = $(this);
+
+        $("#classificationRuleId").val($b.data("id"));
+        $("#clCode").val($b.data("code"));
+        $("#clName").val($b.data("label"));
+        $("#clSide").val($b.data("side"));
+        $("#clJson").val($b.data("json"));
+        $("#clAction").val($b.data("action"));
+        $("#clSeverity").val($b.data("severity"));
+        $("#clSeq").val($b.data("seq"));
+        $("#clActive").prop("checked", $b.data("active") === true || $b.data("active") === "true");
+    });
+
+    $("#rc-classification-reset").on("click", function () {
+        $("#rc-classification-form")[0].reset();
+        $("#classificationRuleId").val("");
+    });
+
+    /* A period-scoped check needs a window, and it must read the
+       aggregates: staging is purged after a few months and a period check
+       that reads it would silently narrow as the window aged out. */
+    function syncScope() {
+        var period = $("#ctScope").val() === "Period";
+
+        $("#ctPeriod").prop("required", period);
+        $("#ctPeriod").closest(".col-md-1").toggleClass("rc-warn-nonsargable", period && !$("#ctPeriod").val());
+
+        if (period) {
+            $("#sourceTypeA").val("RunAggregate");
+            $("#sourceTypeB").val("RunAggregate");
+        }
+    }
+
+    $("#ctScope, #ctPeriod").on("change keyup", syncScope);
+    syncScope();
 });

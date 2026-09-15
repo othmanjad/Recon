@@ -393,7 +393,16 @@ public sealed class ConfigurationRepository(SqlConnection connection)
             : csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 }
 
-internal static class AggregateSpecJson
+/// <summary>
+/// Reads and writes <c>cfg.ControlTotalDefinition</c>'s aggregate specs.
+///
+/// <para>
+/// Public so the portal's control-total editor can build one and check it
+/// with the same parser the engine uses. A screen that composed this JSON by
+/// hand would be a second definition of the format.
+/// </para>
+/// </summary>
+public static class AggregateSpecJson
 {
     private static readonly System.Text.Json.JsonSerializerOptions Options = new()
     {
@@ -407,4 +416,20 @@ internal static class AggregateSpecJson
     public static AggregateSpec Parse(string json) =>
         System.Text.Json.JsonSerializer.Deserialize<AggregateSpec>(json, Options)
         ?? throw new InvalidOperationException($"aggregate spec is empty: {json}");
+
+    /// <summary>
+    /// Serializes a spec, omitting what is not set: a spec full of nulls is
+    /// harder to read in the table than one that names only what it
+    /// restricts.
+    /// </summary>
+    public static string Write(AggregateSpec spec) =>
+        System.Text.Json.JsonSerializer.Serialize(spec, WriteOptions);
+
+    private static readonly System.Text.Json.JsonSerializerOptions WriteOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+        Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() },
+        DefaultIgnoreCondition =
+            System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+    };
 }

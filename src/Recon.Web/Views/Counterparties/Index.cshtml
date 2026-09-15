@@ -114,7 +114,8 @@
                 <h2>@(selected is null ? "Add a counterparty" : "Edit " + selected.Code)</h2>
                 @if (selected is not null)
                 {
-                    <a class="btn btn-sm btn-outline-secondary" asp-action="Index">New</a>
+                    <a class="btn btn-sm btn-outline-secondary"
+                       asp-action="Index" asp-route-blank="true">New counterparty</a>
                 }
             </div>
             <div class="p-3">

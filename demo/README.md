@@ -3,7 +3,10 @@
 The whole platform, end to end, from nothing:
 
 ```bash
-./demo/run-demo.sh
+./demo/run-demo.sh                  # build the database and reconcile a session
+./demo/run-portal.sh --background   # then serve the portal against it
+#   http://127.0.0.1:5080
+./demo/run-portal.sh --stop
 ```
 
 Docker is the only prerequisite — SQL Server and the .NET SDK both run in
@@ -81,6 +84,50 @@ OM_TXN        Unmatched      1
 Neither the excluded nor the duplicate row raises an exception. A rejected
 transaction is not a break, and a source duplicate is a data-quality report.
 
+## The portal, against this database
+
+```bash
+./demo/run-portal.sh --background
+```
+
+Sign in as one of three operators the demo configuration grants, and the same
+screens behave differently:
+
+| Sign in as | Level | What changes |
+|------------|-------|--------------|
+| `cfg.omar` | Configure | every form is there: datasets, rules, fees, schedules, settings, grants |
+| `ops.hala` | Operate | triggers runs, works exceptions, calculates fees — no configuration forms |
+| `read.sami` | Read | the same data, no forms at all |
+| anything else | none | every screen is empty **and says why** — an account with no grants is the correct default, not an error |
+
+Worth opening, in this order:
+
+1. **Run dashboard → the run** — every stage with its timing and the SQL it
+   ran, the control totals, and the pass distribution as bars. The `SQL` button
+   on the Match step is the §9.4 promise made good: what matched a row is
+   answerable from the run itself, not from today's configuration.
+2. **Rule builder** — switch pass 1's comparison to `Contains` and watch it
+   warn that the pass cannot seek an index *and* that this is pass 1. Press
+   *Load a rejected example* then *Validate*: the filter naming `CURRENCY` is
+   refused, because the registry does not mark it matchable.
+3. **Sandbox dry-run** (same screen) — replays the rules over the staged rows
+   of run 1 and reports the match rate per pass: 13, 1, 1, 0, exactly what the
+   CLI run reported.
+4. **Fees** → *Calculate* for run 1, then read the netting line. Every figure
+   on that screen is an integer in minor units.
+5. **Reports** → download `UNMATCHED_CSV`, then open the **Audit log**: the
+   export is in it, with who asked.
+6. **Schedules** → *Preview*: `0 22 * * *` in `Asia/Amman` fires at 22:00
+   local and 19:00 UTC. A server that fired "22:00" in its own zone would
+   reconcile the wrong business date.
+
+To check the portal rather than look at it:
+
+```bash
+cd tests/browser && npm install
+node drive-portal.js            # 115 assertions in a real browser
+```
+
 ## Things worth trying next
 
 ```bash
@@ -116,5 +163,6 @@ docker exec -it reconsql /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa \
 | | |
 |---|---|
 | `run-demo.sh` | The script above |
+| `run-portal.sh` | Serves the portal against this database, in a container |
 | `01-demo-config.sql` | The whole configuration, commented — read this to see what "onboarding a counterparty" actually consists of |
 | `files/` | The two session CSVs, and a table of what every row is there to exercise |

@@ -129,6 +129,16 @@ body {
     font-weight: 600;
     white-space: nowrap;
 }
+/* A sub-label inside a header cell — a field's role under its label — must
+   not inherit the header's uppercasing, or the two run together and read as
+   one phrase. */
+.table.rc-table > thead > tr > th .rc-help {
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 400;
+    display: block;
+    margin-top: 2px;
+}
 .table.rc-table > tbody > tr > td { vertical-align: middle; }
 .rc-table-scroll { overflow-x: auto; }
 

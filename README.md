@@ -21,12 +21,16 @@ that needs a developer, what was built is a CliQ tool with extra tables.
 | `design-review-v03.md` | Two review passes, findings and fixes |
 | `db/` | The SQL Server schema — four scripts, run in order |
 | `db/superseded/` | The v0.1 base and v0.2 delta, kept for history. Do not run |
-| `src/` | The .NET 8 engine — see `src/README.md` |
-| `ui/` | The portal prototype — HTML, Bootstrap 5, jQuery |
+| `src/` | The .NET 8 engine and portal — see `src/README.md` |
+| `src/Recon.Web/` | The portal: ASP.NET Core MVC, Bootstrap and jQuery — see its README |
+| `demo/` | The whole platform end to end from nothing — `./demo/run-demo.sh` |
+| `tests/browser/` | Drives the portal in Chromium against the demo database |
+| `ui/` | The original portal prototype, kept as the design sketch it was |
 | `build.sh` | Build and test in a container (the SDK cannot be installed here) |
 
-Start with `db/README.md` for the five things worth knowing before reading the
-schema, and `ui/README.md` for the front end.
+Start with `demo/README.md` to see it run, `db/README.md` for the five things
+worth knowing before reading the schema, and `src/Recon.Web/README.md` for the
+portal.
 
 ## The constraint that shapes everything
 
@@ -62,10 +66,10 @@ exception.**
 | Area | State |
 |------|-------|
 | Design document | v1.0, reviewed twice |
-| Database schema | Complete, consolidated, and **executed** — 38 tables, built on SQL Server 2022 with 83 passing tests |
-| Portal | Prototype: six screens, browser-verified, reading mock data |
-| Engine (.NET) | Phase 1 and matching complete — 175 tests, and the 2M-row spike meets every budget |
-| Scheduler, reports, fees | **Not started** |
+| Database schema | Complete, consolidated, and **executed** — 38 tables, built on SQL Server 2022 with 88 passing tests |
+| Portal | Complete: twelve screens in ASP.NET Core MVC against the real database, driven in Chromium by 115 assertions |
+| Engine (.NET) | Phases 1–7 complete — matching, reporting, fees and interchange, scheduling and alerting, XML and JSON sources. 175 tests, and the 2M-row spike meets every budget |
+| End to end | `./demo/run-demo.sh` then `./demo/run-portal.sh` — Docker is the only prerequisite |
 
 Six questions remain open. All are business answers rather than design work, all
 have a place to live in the schema already, and none blocks the Phase 1 build —
@@ -93,9 +97,32 @@ Executing it also caught a deployment hazard: filtered indexes require
 `QUOTED_IDENTIFIER ON`, which SSMS sets and **sqlcmd does not** — so the script
 now sets it itself rather than failing in whatever CI pipeline runs it first.
 
-**The portal is executed too:** 20 unit tests for the condition-tree validator
-and a Chromium pass that drives all six screens, failing on any console error or
-horizontal overflow at phone width.
+**The portal is executed too**, against the real database rather than mock
+data: `tests/browser/drive-portal.js` signs in as three different operators and
+as an account with no grants, walks every screen, and asserts 115 things about
+what it finds — failing on any console error, any 5xx, or horizontal overflow
+at phone width.
+
+Running it found five defects that every other suite had passed over:
+
+- A **sandbox dry-run matched nothing while reporting a flawless run.** A
+  dry-run replays another run's staged rows, which still carry that run's
+  verdict in staging's status cache, and every statement before pass 1 filters
+  on `Unmatched` — so the passes saw no candidates while the stale cache made
+  the totals look complete. The feature the design calls non-optional was
+  confidently wrong. A run reading another run's rows now re-opens them first.
+- **Every transaction-level report export failed.** A report returns rows from
+  both sides, so each column compiles twice, and the left's `REF_PRIMARY` does
+  not exist in the right's registry. A column now maps to the other side's
+  equivalent field by role, or to a typed NULL.
+- **The scheduler died on every tick** with "divide by zero": the drift query
+  guarded its division with a sibling predicate, which SQL Server is free to
+  evaluate second.
+- **Two screens failed outright** with "there is already an open DataReader",
+  both holding a reader open across a later query on the one connection a
+  request has.
+- **A user with no grants was shown every counterparty's exception codes** —
+  one dropdown was the only read in the portal not filtered by grant.
 
 **The engine is executed too**, including against volume. 165 unit tests, 10
 integration tests against a live server, and the Phase 1 spike at 2,000,000

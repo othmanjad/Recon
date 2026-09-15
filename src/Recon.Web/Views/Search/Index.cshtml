@@ -1,0 +1,218 @@
+@using Recon.Domain.Configuration
+@using Recon.Web.Controllers
+@{
+    var datasets = (List<DatasetRow>)ViewData["Datasets"]!;
+    var selectedId = ViewData["Selected"] as int?;
+    var dataset = ViewData["Dataset"] as Dataset;
+    var reference = ViewData["ReferenceField"] as DatasetField;
+    var rows = ViewData["Rows"] as List<SearchHit>;
+    var terms = (List<string>?)ViewData["ParsedTerms"] ?? [];
+    var problem = ViewData["Problem"] as string;
+    var maxTerms = (int)ViewData["MaxTerms"]!;
+    var maxRows = (int)ViewData["MaxRows"]!;
+    var fields = dataset?.Fields.OrderBy(f => f.DisplayOrder).ToList() ?? [];
+
+    var currencyIndex = fields.FindIndex(f => f.Role == FieldRole.Currency);
+}
+<div class="d-flex align-items-center justify-content-between flex-wrap gap-2 mb-3">
+    <h1 class="h4 mb-0">Search</h1>
+    <span class="rc-help">
+        single or bulk, per dataset, in the dataset's own field labels
+    </span>
+</div>
+
+@*
+    Deliberately built on the indexes that already exist. The design is
+    explicit that nothing in the requirements is a free-text search problem
+    and that Elasticsearch would be operational overhead for no capability.
+*@
+<div class="alert alert-light border small">
+    One term is a <strong>prefix seek</strong> on the dataset's Reference-role field — Operations
+    types the first characters far more often than all of them. A pasted list is an exact-match
+    lookup of up to @maxTerms references, which is how a partner's email actually arrives. A date
+    range is partition elimination, not a filter. At most @maxRows rows come back; beyond that the
+    right answer is a report.
+</div>
+
+<div class="rc-card mb-3">
+    <div class="rc-card-head"><h2>Find transactions</h2></div>
+    <div class="p-3">
+        <form method="get" asp-action="Index" class="row g-3">
+            <div class="col-md-4">
+                <label class="form-label" for="id">Dataset</label>
+                <select class="form-select" id="id" name="id">
+                    @foreach (var row in datasets)
+                    {
+                        <option value="@row.DatasetId" selected="@(selectedId == row.DatasetId)">
+                            @row.CounterpartyCode / @row.Code
+                        </option>
+                    }
+                </select>
+                @if (reference is not null)
+                {
+                    <div class="form-text">
+                        Searching <code class="rc-field">@reference.FieldCode</code>
+                        (@reference.DisplayLabel) — the field whose role is Reference.
+                    </div>
+                }
+            </div>
+            <div class="col-md-2">
+                <label class="form-label" for="status">Status</label>
+                <select class="form-select" id="status" name="status">
+                    <option value="">Any</option>
+                    @foreach (var status in Enum.GetNames<MatchStatus>())
+                    {
+                        <option value="@status" selected="@((ViewData["Status"] as string) == status)">
+                            @status
+                        </option>
+                    }
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label" for="from">Transaction date from</label>
+                <input class="form-control" type="date" id="from" name="from"
+                       value="@((ViewData["From"] as DateOnly?)?.ToString("yyyy-MM-dd"))">
+            </div>
+            <div class="col-md-3">
+                <label class="form-label" for="to">to</label>
+                <input class="form-control" type="date" id="to" name="to"
+                       value="@((ViewData["To"] as DateOnly?)?.ToString("yyyy-MM-dd"))">
+            </div>
+            <div class="col-12">
+                <label class="form-label" for="terms">References</label>
+                <textarea class="form-control rc-mono" id="terms" name="terms" rows="3"
+                          placeholder="one reference for a prefix search, or paste a list — commas, spaces or one per line">@ViewData["Terms"]</textarea>
+                <div class="form-text">
+                    @if (terms.Count == 1)
+                    {
+                        <text>One term: prefix search.</text>
+                    }
+                    else if (terms.Count > 1)
+                    {
+                        <text>@terms.Count terms: exact-match lookup.</text>
+                    }
+                    else
+                    {
+                        <text>A search needs either a reference or a date range.</text>
+                    }
+                </div>
+            </div>
+            <div class="col-12 d-flex gap-2">
+                <button class="btn btn-primary" type="submit">Search</button>
+                <a class="btn btn-outline-secondary" asp-action="Index" asp-route-id="@selectedId">Clear</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+@if (problem is not null)
+{
+    <div class="alert alert-warning" role="alert">@problem</div>
+}
+else if (dataset is null)
+{
+    <div class="rc-card"><div class="rc-empty">No dataset is visible to you.</div></div>
+}
+else if (rows is null)
+{
+    <div class="rc-card"><div class="rc-empty">Enter a reference or a date range.</div></div>
+}
+else
+{
+    <div class="rc-card">
+        <div class="rc-card-head">
+            <h2>@dataset.Code</h2>
+            <span class="rc-help">
+                @rows.Count row(s)@(rows.Count >= maxRows ? $" — capped at {maxRows}" : "")
+            </span>
+        </div>
+        <div class="rc-table-scroll">
+            <table class="table rc-table table-hover align-middle">
+                <thead>
+                    <tr>
+                        <th>Staging id</th>
+                        <th>Tx date</th>
+                        @foreach (var field in fields)
+                        {
+                            @* The counterparty's own vocabulary, straight from
+                               the registry: the engine knows none of these
+                               names. *@
+                            <th title="@field.FieldCode → @field.StorageSlot">
+                                @field.DisplayLabel
+                                @if (field.Role is { } role)
+                                {
+                                    <span class="rc-help d-block">@role</span>
+                                }
+                            </th>
+                        }
+                        <th>Status</th>
+                        <th>Exception</th>
+                        <th>Matched with</th>
+                        <th>Run</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (rows.Count == 0)
+                    {
+                        <tr>
+                            <td colspan="@(fields.Count + 6)" class="rc-empty">
+                                Nothing staged matches that. A reference that should be here and is
+                                not may have failed to parse — the run page lists the parse errors
+                                with their line numbers.
+                            </td>
+                        </tr>
+                    }
+                    @foreach (var hit in rows)
+                    {
+                        var currency = currencyIndex >= 0 ? hit.Values[currencyIndex] : null;
+                        <tr>
+                            <td class="rc-mono">@hit.StagingId</td>
+                            <td class="rc-mono">@hit.TxDate.ToString("yyyy-MM-dd")</td>
+                            @for (var i = 0; i < fields.Count; i++)
+                            {
+                                var field = fields[i];
+                                var value = hit.Values[i];
+
+                                if (field.Role == FieldRole.Amount && long.TryParse(value, out var minor))
+                                {
+                                    @* Amounts are integer minor units in the
+                                       slot; the scale belongs to the row's
+                                       currency, which is why the view formats
+                                       and the query does not. *@
+                                    <td class="rc-num">
+                                        @Fmt.Money(minor, currency)
+                                        <span class="rc-help">@currency</span>
+                                    </td>
+                                }
+                                else
+                                {
+                                    <td class="@(field.DataType == FieldDataType.Integer ? "rc-num" : null)">
+                                        @(value ?? "—")
+                                    </td>
+                                }
+                            }
+                            <td>@Fmt.StatusBadge(hit.MatchStatus)</td>
+                            <td class="rc-mono">@(hit.ExceptionCode ?? "—")</td>
+                            <td class="rc-mono">@(hit.MatchedWithId?.ToString() ?? "—")</td>
+                            <td class="rc-mono">
+                                <a asp-controller="Runs" asp-action="Detail" asp-route-id="@hit.LoadRunId">
+                                    @hit.LoadRunId
+                                </a>
+                                @if (hit.ResultRunId is { } resultRun && resultRun != hit.LoadRunId)
+                                {
+                                    @* Which run staged the row and which run
+                                       last judged it are different questions,
+                                       and after a rematch they have different
+                                       answers. *@
+                                    <span class="rc-help d-block" title="The run whose verdict this row carries">
+                                        judged by @resultRun
+                                    </span>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}

@@ -115,6 +115,17 @@ cat <<EOF
     SELECT * FROM ops.ControlTotalResult;        -- the balance proof
     SELECT GeneratedSql FROM ops.ReconRunStep WHERE StepName = 'Match';
 
-  The portal prototype is separate and needs no server:
-    open ui/index.html
+  The portal reads this same database. Start it and sign in:
+
+    ./demo/run-portal.sh --background     # http://127.0.0.1:5080
+    ./demo/run-portal.sh --stop
+
+    cfg.omar    Configure   every form: datasets, rules, fees, settings, grants
+    ops.hala    Operate     triggers runs and works exceptions
+    read.sami   Read        the same data, no forms
+    anyone else             nothing at all, and the screen says why
+
+  To check it rather than look at it:
+
+    cd tests/browser && npm install && node drive-portal.js
 EOF

@@ -1,16 +1,23 @@
-# Engine
+# Engine and portal
 
-.NET 8. Four projects, and the dependency direction is the point:
+.NET 8. Five projects, and the dependency direction is the point:
 
 ```
 Recon.Domain    the field registry, the condition tree, money.  No I/O, no SQL.
    ▲
 Recon.Data      repositories: configuration, runs, checkpoints, the snapshot.
    ▲
-Recon.Engine    providers, parsing, staging, and THE SQL COMPILER.
-   ▲
-Recon.Cli       the batch entry point.  Thin by design.
+Recon.Engine    providers, parsing, staging, reporting, fees, scheduling,
+   ▲            and THE SQL COMPILER.
+   ├── Recon.Cli    the batch entry point.  Thin by design.
+   └── Recon.Web    the portal: MVC, Razor, Bootstrap and jQuery.
+                    See Recon.Web/README.md.
 ```
+
+Nothing in `Recon.Web` emits SQL of its own beyond its own reads in
+`PortalQueries`, and nothing there resolves a field name: the portal hands
+field codes to the engine's compiler, which resolves them against the registry
+exactly as the CLI's runs do.
 
 ## The one thing to read first
 
@@ -50,7 +57,8 @@ close.
 |-------|-------|
 | **Acquire / Parse** | `CsvReader` streams; a 2M-row file is never a list. `RowParser` reuses one `StagingRecord` across rows, so the hot path allocates only the values — and a test proves `Reset` leaves nothing behind, because a missed slot would let row N inherit row N−1's value invisibly |
 | **Stage** | `StagingBulkCopy` with `TableLock`, 100k batches, batch-local sorting on the clustered key. There is no "load into a heap then index" path: staging is one shared table with a permanent clustered index (review blocker A1) |
-| **Exclude / Duplicates** | Before pass 1, once per dataset. These are the only two statements that write `MatchStatus` before the end of the run |
+| **Reset** | Only for a run reading another run's staged rows — a `Rematch` or a `Sandbox` replay. Those rows still carry the source run's verdict, and everything below filters on `Unmatched`, so without this the replay excluded nothing, found no duplicates and matched nothing while the stale cache made its totals look complete |
+| **Exclude / Duplicates** | Before pass 1, once per dataset. With `Reset`, the only statements that write `MatchStatus` before the end of the run |
 | **Match** | Ordered passes. Each writes **only** to `ops.MatchResult` and anti-joins against it; candidates are materialised and counted per side before anything is written, so a composite pass cannot explode many-to-many |
 | **Stage (finalize)** | One set-based update stamps the outcome onto staging, with `ResultRunId` saying which run produced it |
 | **Classify** | Once per dataset, first matching rule wins. Each exception snapshots its matchable key values, so late-arrival auto-close survives staging archival |
@@ -78,6 +86,13 @@ directly.
 ./build.sh test            # 165 unit tests
 ./build.sh test-all        # + integration tests (needs RECON_TEST_CONNECTION)
 ./build.sh perf            # the Phase 1 2M-row spike
+```
+
+The portal has its own runner and its own browser suite:
+
+```bash
+./demo/run-portal.sh --background          # serve it against the demo database
+node tests/browser/drive-portal.js         # 115 assertions in Chromium
 ```
 
 The integration tests **skip** rather than fail when `RECON_TEST_CONNECTION` is

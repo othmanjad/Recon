@@ -1,5 +1,13 @@
 # Portal prototype
 
+> **This is the prototype, not the portal.** It was the design sketch: six
+> screens over mock data, no server, opening straight from the filesystem. The
+> real portal is `src/Recon.Web` — the same Bootstrap and jQuery, rendered by
+> ASP.NET Core MVC against the real database. This directory is kept because
+> the prototype is still the fastest way to see a screen's shape without a
+> database, and because `js/condition-tree.js` and its 20 unit tests are the
+> validator the portal serves to the browser.
+
 HTML + Bootstrap 5 + jQuery + plain JavaScript. **No SPA framework and no build
 step** — open `index.html` in a browser and it runs. The rationale is in
 `cliq-recon-design.md` §13.1.

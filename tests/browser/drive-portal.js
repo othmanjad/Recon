@@ -90,6 +90,7 @@ async function shot(page, name) {
         ["dashboard", "/", "Run dashboard"],
         ["runs", "/runs", "Trigger a run"],
         ["exceptions", "/exceptions", "Workspace"],
+        ["search", "/search", "Find transactions"],
         ["reports", "/reports", "Export"],
         ["counterparties", "/counterparties", "A counterparty is the scope of access"],
         ["datasets", "/datasets", "This table is the field registry"],
@@ -110,8 +111,8 @@ async function shot(page, name) {
         /* The shell must have rendered: a view that throws mid-render can
            still return 200 with a truncated page. */
         check(await omar.locator(".rc-brand").count() === 1, `${url} lost the header`);
-        check(await omar.locator(".rc-sidebar .nav-link").count() === 11,
-            `${url} rendered ${await omar.locator(".rc-sidebar .nav-link").count()} nav links, expected 11`);
+        check(await omar.locator(".rc-sidebar .nav-link").count() === 12,
+            `${url} rendered ${await omar.locator(".rc-sidebar .nav-link").count()} nav links, expected 12`);
         check(await omar.locator("tbody:empty").count() === 0,
             `${url} left an empty table body`);
 
@@ -409,6 +410,61 @@ async function shot(page, name) {
     await omar.goto(BASE + "/audit?entityType=Report", { waitUntil: "load" });
     check(/Export/.test(await omar.locator("body").innerText()),
         "the export was not written to the audit log");
+
+    // =================================================================
+    // 10b. Search: a prefix seek, a bulk list, and the registry's labels.
+    // =================================================================
+    await omar.goto(BASE + "/search", { waitUntil: "load" });
+
+    // An unfiltered search returns nothing rather than the first 500 rows of
+    // whatever the clustered index holds.
+    check(/Enter a reference or a date range/.test(await omar.locator("body").innerText()),
+        "an unfiltered search did not refuse to guess");
+
+    // One term: a prefix.
+    await omar.fill("#terms", "E2E-2026");
+    await omar.locator('button:has-text("Search")').click();
+    await omar.waitForLoadState("load");
+
+    let searchText = await omar.locator("body").innerText();
+    check(/prefix search/.test(searchText), "a single term was not treated as a prefix");
+
+    const prefixRows = await omar.locator("table.rc-table tbody tr").count();
+    check(prefixRows > 1, `a prefix search over the demo references returned ${prefixRows} row(s)`);
+
+    /* The results are labelled in the dataset's own vocabulary, straight
+       from the registry — "End To End Id", not Text1. */
+    /* Compared case-insensitively: the stylesheet upper-cases table
+       headers, so innerText is not the text the view wrote. */
+    const headers = (await omar.locator("table.rc-table thead th").allInnerTexts())
+        .map(h => h.replace(/\s+/g, " ").trim().toLowerCase());
+
+    check(headers.some(h => h.includes("end to end id")),
+        `the results are not labelled from the registry: ${headers.join(" | ")}`);
+    check(!headers.some(h => /^text\d/.test(h)),
+        `a storage slot name leaked into the results header: ${headers.join(" | ")}`);
+
+    // A bulk paste: exact matches, one per line.
+    const references = await omar.locator("table.rc-table tbody tr td:nth-child(3)")
+        .allInnerTexts();
+
+    const twoOfThem = references.slice(0, 2).map(t => t.trim()).filter(t => t.length > 0);
+
+    if (twoOfThem.length === 2) {
+        await omar.fill("#terms", twoOfThem.join("\n"));
+        await omar.locator('button:has-text("Search")').click();
+        await omar.waitForLoadState("load");
+
+        searchText = await omar.locator("body").innerText();
+        check(/2 terms: exact-match lookup/.test(searchText),
+            "a pasted list was not treated as an exact-match lookup");
+        check(await omar.locator("table.rc-table tbody tr").count() === 2,
+            "the bulk lookup did not return one row per reference");
+    } else {
+        problems.push("could not read two references out of the search results to paste back");
+    }
+
+    await shot(omar, "search");
 
     // =================================================================
     // 11. Exceptions: assign, then close with a reason.

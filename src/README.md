@@ -74,6 +74,23 @@ loaded the data are different, and `ops.ReconRun.StagingRunId`
 RunId` returns nothing at all on a Rematch — which is exactly what happened
 before the schema stated the rule.
 
+## Getting the file in: one arrival, one pipeline
+
+Two things can put a file into a run — an operator uploading it, or
+`Recon.Engine/Providers/FolderAcquisition` fetching it from a directory — and
+both go through the same two classes afterwards. `SourceFileRepository` records
+the arrival in `ops.SourceFile` with its SHA-256, and `Staging/FileStager`
+parses it under the run as a checkpointed step. Every staged row and every
+parse error carries the `SourceFileId`, so "which file produced this row" is a
+query rather than an inference from load order.
+
+`FolderAcquisition` substitutes the business date into the file format's
+file-name pattern (`{yyyyMMdd}`, `{yyyy-MM-dd}`, `{ddMMyyyy}`, `{yyyy}`,
+`{MM}`, `{dd}`, `{session}`) and matches it as a regex, bounded by a timeout
+because the pattern comes from configuration. Two files matching is an error,
+not a choice. `Sftp` and `Api` are refused by name: the seam is that a new
+method is a new class here, and half of one is worse than none.
+
 ## Building and testing
 
 The SDK cannot be installed in the environment this was written in (the network
@@ -92,7 +109,7 @@ The portal has its own runner and its own browser suite:
 
 ```bash
 ./demo/run-portal.sh --background          # serve it against the demo database
-node tests/browser/drive-portal.js         # 115 assertions in Chromium
+node tests/browser/drive-portal.js         # 133 assertions in Chromium
 ```
 
 The integration tests **skip** rather than fail when `RECON_TEST_CONNECTION` is

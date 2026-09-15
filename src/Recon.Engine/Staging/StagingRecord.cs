@@ -43,7 +43,11 @@ public sealed class StagingRecord
         Array.Clear(Dec);
         Array.Clear(Date);
         Array.Clear(Flag);
-        SourceFileId = null;
+
+        // SourceFileId is deliberately NOT cleared: it identifies the file
+        // being loaded, which is the same for every row of it, and the record
+        // is reused per row. Clearing it here meant every staged row but the
+        // first one forgot where it came from.
         RawRowNumber = null;
         MatchStatus = MatchStatus.Unmatched;
     }

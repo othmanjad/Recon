@@ -51,7 +51,8 @@ two files in `demo/files/` on the Runs screen and watch a session reconcile.
 
 Nothing in operating the platform needs a shell: the connection string, the
 schema install, the first access grant, running a session from two files,
-stopping the scheduler and running the housekeeping are all screens. With
+stopping the scheduler, telling the platform which folder a partner's files
+land in, and running the housekeeping are all screens. With
 Docker and no .NET installed, `./demo/run-demo.sh` then
 `./demo/run-portal.sh --background` does the same thing in containers.
 
@@ -165,6 +166,17 @@ unmeetable from the portal:
 - **A second counterparty or dataset could not be created at all.** The create
   forms carried the currently selected row's id, so every save was an edit of
   whichever one happened to be first.
+
+Extending that path to a **second business date acquired from a folder** — the
+way a scheduled night works, with nothing uploaded — found the largest hole of
+all, in a promise rather than in a line of code: `cfg.AcquisitionDefinition`
+described where each dataset's files come from and **nothing read it**. The
+scheduler carried its own copy of the run sequence, that copy had no
+acquisition step, and the demo always staged its files first — so "runs
+unattended for a full week" meant "reconciles whatever somebody had already
+loaded". A scheduled run now goes through the same `SessionRunner` the portal's
+buttons use, and a day whose file never arrived is recorded as `Rejected` with
+that reason instead of as a run that matched nothing.
 
 **The engine is executed too**, including against volume. 165 unit tests, 10
 integration tests against a live server, and the Phase 1 spike at 2,000,000

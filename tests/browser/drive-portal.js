@@ -152,9 +152,14 @@ async function shot(page, name) {
     check(parseInt(matchedTile.replace(/[^0-9]/g, ""), 10) > 0,
         `the matched-rows tile reads "${matchedTile}"`);
 
-    // The run list must link to a run detail page.
-    const runLink = omar.locator('a[href*="/Runs/Detail/"]').first();
-    check(await runLink.count() > 0, "the dashboard lists no run");
+    /* The DEMO definition's run, not simply the newest one:
+       drive-onboard.js leaves runs of its own counterparty in the same
+       database, and the assertions below are about this reconciliation's
+       passes and control totals. */
+    const runLink = omar
+        .locator('tr:has-text("CLIQ_OM") a[href*="/Runs/Detail/"]').first();
+
+    check(await runLink.count() > 0, "the dashboard lists no run for the demo definition");
 
     // =================================================================
     // 3. Run detail: stages, control totals, distribution, and the SQL

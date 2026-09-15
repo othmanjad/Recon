@@ -165,21 +165,19 @@ public sealed class RunsController(
         }
 
         var directory = sessions.StorageFor(businessDate, definition.Code);
-        string? leftPath = null;
-        string? rightPath = null;
+        StoredFile? left = null;
+        StoredFile? right = null;
 
         try
         {
             if (leftFile is not null)
             {
-                var stored = await Save(leftFile, definition.Left.Code).ConfigureAwait(false);
-                leftPath = stored.Path;
+                left = await Save(leftFile, definition.Left.Code).ConfigureAwait(false);
             }
 
             if (rightFile is not null)
             {
-                var stored = await Save(rightFile, definition.Right.Code).ConfigureAwait(false);
-                rightPath = stored.Path;
+                right = await Save(rightFile, definition.Right.Code).ConfigureAwait(false);
             }
         }
         catch (IOException ex)
@@ -191,7 +189,7 @@ public sealed class RunsController(
         var outcome = await sessions.RunAsync(
             User, definitionId, businessDate, sessionRef,
             Db.ParseEnum<RunType>(string.IsNullOrWhiteSpace(runType) ? "Manual" : runType),
-            access.UserName(User), leftPath, rightPath,
+            access.UserName(User), left, right,
             cancellationToken: cancellationToken).ConfigureAwait(false);
 
         return Land(outcome, definition.Code);
@@ -242,14 +240,26 @@ public sealed class RunsController(
                       (s.Errors.Count > 0 ? $", {s.Errors.Count:N0} rejected" : string.Empty)))
             + ".";
 
+        // A file that was fetched rather than uploaded, and a file whose
+        // content had already been received, are both things the operator
+        // should read off the same message rather than go looking for. An
+        // upload needs no line: the operator just chose it.
+        var fetched = outcome.Acquired
+            .Where(a => a.State is Recon.Engine.Providers.AcquisitionState.Acquired
+                            or Recon.Engine.Providers.AcquisitionState.Duplicate)
+            .Select(a => a.Message)
+            .ToList();
+
+        var acquired = fetched.Count == 0 ? string.Empty : " " + string.Join(" ", fetched);
+
         var result = outcome.Outcome!;
 
         TempData[result.Status == RunStatus.Completed ? "Ok" : "Error"] =
             result.Status == RunStatus.Completed
-                ? $"Run {outcome.RunId} of {definitionCode} completed:{staged} " +
+                ? $"Run {outcome.RunId} of {definitionCode} completed:{acquired}{staged} " +
                   $"{result.Counts.Matched:N0} matched, {result.Counts.Unmatched:N0} unmatched, " +
                   $"{result.Counts.Ambiguous:N0} ambiguous."
-                : $"Run {outcome.RunId} of {definitionCode} failed:{staged} {result.Error}";
+                : $"Run {outcome.RunId} of {definitionCode} failed:{acquired}{staged} {result.Error}";
 
         return RedirectToAction(nameof(Detail), new { id = outcome.RunId });
     }

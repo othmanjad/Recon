@@ -73,7 +73,12 @@
                 A second attempt for the same definition and business date is <em>refused</em>, not
                 queued: the run lock is held for the run's duration, and the refusal is recorded as
                 a <code>Rejected</code> run so the attempt is visible rather than lost. This form
-                runs against whatever is already staged — to bring files, use the one below.
+                asks each dataset's <em>acquisition</em> for the day's file — a folder is searched
+                using the format's file-name pattern — and reconciles what is already staged for a
+                dataset whose files are uploaded instead. To bring the files yourself, use the form
+                below. A file that never arrived is recorded as <code>Rejected</code> with that
+                reason, because a missing file and a run that matched nothing are not the same
+                event.
             </div>
         }
     </div>

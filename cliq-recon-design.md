@@ -150,6 +150,10 @@ Both sides of a reconciliation are datasets, supplied by one of three providers:
 
 A provider returns `IEnumerable<IDictionary<string,string>>` and knows nothing downstream of itself. `FileProvider` delegates to one of three readers — `CsvReader`, `XmlReader`, `JsonReader` — selected by the format definition. A new physical format = one new reader class; nothing else in the system changes.
 
+**What is built:** `Recon.Engine.Providers.FolderAcquisition`, plus uploads through the portal. It reads `cfg.AcquisitionDefinition`, substitutes the business date into the format's file-name pattern, and refuses to choose when two files match — which of them is the day's truth is not something to guess at. `Sftp` and `Api` are in the schema's method list and are **refused by name** rather than half-built, in the screen and in the controller: configuration that fetches nothing looks like coverage, which is worse than a blank. The seam this section promises is that a new method is a new class beside it and nothing else changes.
+
+Whichever way a file arrives, it is recorded once in `ops.SourceFile` with its SHA-256, and every staged row and parse error carries that file's id. The unique index on (dataset, hash, business date) is what makes the same content arriving twice a duplicate rather than a second run.
+
 ---
 
 ## 6. The field registry — what makes the rule builder possible
@@ -506,7 +510,7 @@ is a courtesy to Operations, never a security control.
 | **3 — Portal** | Rule builder, mapping editor, sandbox dry-run, search, exception workspace, dashboard, per-counterparty RBAC | Operations onboards a **second** counterparty unassisted — the real test of the design |
 | **4 — Reporting** | Dynamic report engine, the four SRS Excel outputs | Sheets match the SRS specification |
 | **5 — Interchange** | Fee schedules, per-transaction calculation, netting, fee-report comparison | Netting ties to the Fee Net Transactions Report |
-| **6 — Automation** | Scheduler, API acquisition, alerting, retries, archive policy | Runs unattended for a full week |
+| **6 — Automation** | Scheduler, folder acquisition, alerting, retries, archive policy | Runs unattended for a full week |
 | **7 — Extensions** | XML/JSON readers, definition cloning/templates, NL search over `QueryJson`, exception clustering | — |
 
 The Phase 3 exit criterion is deliberately harsh: if a second counterparty cannot be onboarded without a developer, the platform was not built — only a CliQ tool with extra tables.
@@ -515,11 +519,13 @@ XML/JSON readers sit in Phase 7 on purpose: the architecture already supports th
 
 ### 16.1 What is built
 
-All seven phases are implemented and executed. The schema runs on SQL Server 2022 with 88 passing tests; the engine has 165 unit and 10 integration tests and meets every budget in §4 at 2,000,000 rows per side; the portal is ASP.NET Core MVC over the real database, driven in Chromium by 126 assertions across twelve screens, three access levels and an account with no grants. `./demo/run-demo.sh` reconciles a session from nothing and `./demo/run-portal.sh` serves the portal against it, with Docker as the only prerequisite.
+All seven phases are implemented and executed. The schema runs on SQL Server 2022 with 88 passing tests; the engine has 165 unit and 10 integration tests and meets every budget in §4 at 2,000,000 rows per side; the portal is ASP.NET Core MVC over the real database, driven in Chromium by 133 assertions across thirteen screens, three access levels and an account with no grants. `./demo/run-demo.sh` reconciles a session from nothing and `./demo/run-portal.sh` serves the portal against it, with Docker as the only prerequisite.
 
-The Phase 3 exit criterion is not something a test can assert: onboarding a second counterparty unassisted is a claim about what an Operations user can do, and it is settled by watching one of them do it. What the portal can show is that nothing in that sequence needs a developer, and `tests/browser/drive-onboard.js` shows it: a counterparty, two datasets, their field registries, a file format and its field mappings per side, a definition, a matching pass, an exclusion, a classification per side, a control total, two activations and a run from two uploaded files — asserted end to end, with no SQL anywhere. `demo/01-demo-config.sql` is the same rows written as SQL, for a script that must not need a browser.
+The Phase 3 exit criterion is not something a test can assert: onboarding a second counterparty unassisted is a claim about what an Operations user can do, and it is settled by watching one of them do it. What the portal can show is that nothing in that sequence needs a developer, and `tests/browser/drive-onboard.js` shows it in 113 assertions: a counterparty, two datasets, their field registries, a file format and its field mappings per side, a definition, a matching pass, an exclusion, a classification per side, a control total, two activations and a run from two uploaded files — then a second business date reconciled from a watched folder with nothing uploaded at all, the wrong day's file sitting beside the right one. No SQL anywhere. `demo/01-demo-config.sql` is the same rows written as SQL, for a script that must not need a browser.
 
-The portal also installs the platform. It builds a connection string, tests it, creates the database and applies the four scripts in `db/`, which means the answer to "where does this run" is a machine with SQL Server on it and nothing else.
+The Phase 6 exit criterion — "runs unattended for a full week" — needed that second part to be true at all. The scheduler carried its own copy of the run sequence, that copy had no acquisition step, and nothing read `cfg.AcquisitionDefinition`: an unattended week would have reconciled whatever somebody had already staged. A fired schedule now goes through the same `SessionRunner` the portal's buttons use, and a day whose file never arrived is recorded as a `Rejected` run carrying that reason and raises the file-not-received alert, rather than appearing as a run that matched nothing.
+
+The portal also installs the platform. It builds a connection string, tests it, creates the database and applies the four scripts in `db/`, which means the answer to "where does this run" is a machine with SQL Server on it and nothing else. Every operational step is a screen: the datasets, formats and mappings, the three rule sets, the acquisition folder, the schedules and their alert policies, the scheduler's own switch, and the housekeeping jobs.
 
 The six open questions in §15 remain open. Each is a business answer, each has a place in the schema already, and the portal surfaces two of them where the decision is taken rather than in a document: the rounding mode on a fee schedule says HalfUp is a default and not a decision, and the retention period on the settings screen is flagged as a placeholder.
 

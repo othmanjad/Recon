@@ -153,6 +153,13 @@ needs no SQL:
    naming a field outside it is refused.
 8. **Activate** the definition, then **Runs → Upload a session and reconcile
    it**.
+9. For the night after that, tell the platform where the files land:
+   **Datasets & fields → Acquisition**, method *Folder*, the directory on the
+   server, and a **file-name pattern** on the format with `{yyyyMMdd}` in it.
+   *Check now* answers whether tonight's run will find the file — before
+   tonight. From then on the plain **Run** button, and the scheduler, fetch the
+   day's file themselves; the *Files received* table below shows what arrived,
+   how many rows it staged and how many it rejected.
 
 To check the portal rather than look at it:
 
@@ -160,7 +167,8 @@ To check the portal rather than look at it:
 cd tests/browser && npm install
 node drive-portal.js            # every screen, three access levels
 node drive-setup.js             # from no database to a reconciled run
-node drive-onboard.js           # the sequence above, asserted end to end
+node drive-onboard.js           # the sequence above, asserted end to end —
+                                # including a second day acquired from a folder
 ```
 
 ## Things worth trying next

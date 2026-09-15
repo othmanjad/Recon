@@ -262,68 +262,92 @@ public sealed class SchedulerService(
         // lock is session-scoped and the run must hold it for its duration.
         using var scope = services.GetRequiredService<IServiceScopeFactory>().CreateScope();
         var connection = scope.ServiceProvider.GetRequiredService<SqlConnection>();
-        var config = scope.ServiceProvider.GetRequiredService<ConfigurationRepository>();
-        var runs = scope.ServiceProvider.GetRequiredService<RunRepository>();
 
-        var definition = await config.LoadDefinitionAsync(definitionId, cancellationToken)
-            .ConfigureAwait(false);
+        // The whole sequence — the lock, the acquisition, the staging, the
+        // passes — is SessionRunner's, the same one the portal's buttons use.
+        // The scheduler used to carry its own copy, which is why a scheduled
+        // run reconciled whatever happened to be staged already: the copy had
+        // no acquisition step and nobody noticed, because the demo always
+        // staged its files first.
+        var sessions = scope.ServiceProvider.GetRequiredService<SessionRunner>();
 
-        var problems = definition.ActivationProblems();
-        if (problems.Count > 0)
+        var outcome = await sessions.RunAsync(
+            user: null, definitionId, businessDate, sessionRef: null, RunType.Scheduled,
+            "scheduler", cancellationToken: cancellationToken).ConfigureAwait(false);
+
+        // Only the arrivals: "this dataset's files are uploaded" is true every
+        // night and would be two log lines a night saying nothing.
+        foreach (var acquired in outcome.Acquired.Where(
+                     a => a.HasFile || a.State == Recon.Engine.Providers.AcquisitionState.Duplicate))
         {
-            _log.LogError("{Code} cannot be activated, so the schedule did not run it: {Problems}",
-                code, string.Join("; ", problems));
-            return;
+            _log.LogInformation("{Code}: {Message}", code, acquired.Message);
         }
 
-        if (!await runs.TryAcquireRunLockAsync(definitionId, businessDate, sessionRef: null,
-                cancellationToken: cancellationToken).ConfigureAwait(false))
+        if (outcome.Refusal is { } refusal)
         {
-            // Another node, or a manual trigger, holds it. Recorded rather
-            // than silently skipped: Operations needs to see that the
-            // scheduled attempt did nothing and why.
-            await runs.RecordRejectedAsync(
-                definitionId, definition.Version, businessDate, null, RunType.Scheduled,
-                "scheduler", "another run holds the lock", cancellationToken).ConfigureAwait(false);
+            // Refused attempts are already recorded as Rejected runs. A
+            // missing file is the one that matters most: it is the difference
+            // between "nothing to reconcile" and "the partner did not send".
+            _log.LogWarning("{Code} for {Date:yyyy-MM-dd} did not run: {Reason}",
+                code, businessDate, refusal);
 
-            _log.LogWarning("{Code} for {Date:yyyy-MM-dd} is already running; attempt recorded as Rejected.",
-                code, businessDate);
-            return;
-        }
+            var missing = outcome.Acquired.Any(
+                a => a.State == Recon.Engine.Providers.AcquisitionState.NotFound);
 
-        try
-        {
-            var run = await runs.CreateRunAsync(
-                definition, businessDate, null, RunType.Scheduled, "scheduler",
-                cancellationToken: cancellationToken).ConfigureAwait(false);
-
-            var outcome = await new ReconciliationRunner(connection, runs)
-                .ExecuteAsync(definition, run, cancellationToken).ConfigureAwait(false);
-
-            _log.LogInformation("{Code} run {RunId}: {Status}, {Matched} matched, {Unmatched} unmatched.",
-                code, run.RunId, outcome.Status, outcome.Counts.Matched, outcome.Counts.Unmatched);
-
-            if (outcome.Status == RunStatus.Failed)
+            if (missing)
             {
-                var alerts = scope.ServiceProvider.GetService<AlertService>()
-                    ?? new AlertService(connection, [new DashboardAlertChannel()]);
-
-                await alerts.RaiseAsync(new AlertEvent
-                {
-                    EventType = outcome.ControlTotals.Any(t => !t.IsBalanced && t.FailsRun)
-                        ? AlertEventType.ControlTotalMismatch
-                        : AlertEventType.RunFailed,
-                    DefinitionId = definitionId,
-                    RunId = run.RunId,
-                    Message = $"{code} run {run.RunId} failed: {outcome.Error}",
-                }, cancellationToken).ConfigureAwait(false);
+                await RaiseAsync(
+                    scope.ServiceProvider, connection, AlertEventType.FileNotReceived,
+                    definitionId, null, $"{code} for {businessDate:yyyy-MM-dd}: {refusal}",
+                    cancellationToken).ConfigureAwait(false);
             }
+
+            return;
         }
-        finally
+
+        foreach (var staged in outcome.Staged)
         {
-            await runs.ReleaseRunLockAsync(definitionId, businessDate, null, cancellationToken)
-                .ConfigureAwait(false);
+            _log.LogInformation("{Code}: {Dataset} staged {Rows} rows in {Seconds:N1}s.",
+                code, staged.Dataset, staged.RowsWritten, staged.Elapsed.TotalSeconds);
         }
+
+        var result = outcome.Outcome!;
+
+        _log.LogInformation("{Code} run {RunId}: {Status}, {Matched} matched, {Unmatched} unmatched.",
+            code, outcome.RunId, result.Status, result.Counts.Matched, result.Counts.Unmatched);
+
+        if (result.Status == RunStatus.Failed)
+        {
+            await RaiseAsync(
+                scope.ServiceProvider, connection,
+                result.ControlTotals.Any(t => !t.IsBalanced && t.FailsRun)
+                    ? AlertEventType.ControlTotalMismatch
+                    : AlertEventType.RunFailed,
+                definitionId, outcome.RunId,
+                $"{code} run {outcome.RunId} failed: {result.Error}",
+                cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private static async Task RaiseAsync(
+        IServiceProvider services,
+        SqlConnection connection,
+        AlertEventType type,
+        int definitionId,
+        long? runId,
+        string message,
+        CancellationToken cancellationToken)
+    {
+        var alerts = services.GetService<AlertService>()
+            ?? new AlertService(connection, [new DashboardAlertChannel()]);
+
+        await alerts.RaiseAsync(new AlertEvent
+        {
+            EventType = type,
+            DefinitionId = definitionId,
+            RunId = runId,
+            Message = message,
+        }, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>

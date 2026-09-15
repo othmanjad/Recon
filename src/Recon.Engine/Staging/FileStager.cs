@@ -45,13 +45,14 @@ public sealed class FileStager(SqlConnection connection)
         DateOnly businessDate,
         string path,
         RunRepository runs,
+        long? sourceFileId = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(definition);
 
         return StageAsync(
             definition.DatasetFor(side), side, runId, businessDate,
-            () => File.OpenText(path), runs, cancellationToken);
+            () => File.OpenText(path), runs, sourceFileId, cancellationToken);
     }
 
     /// <summary>
@@ -66,6 +67,7 @@ public sealed class FileStager(SqlConnection connection)
         DateOnly businessDate,
         Func<TextReader> open,
         RunRepository runs,
+        long? sourceFileId = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(dataset);
@@ -135,7 +137,7 @@ public sealed class FileStager(SqlConnection connection)
             if (errors.Count > 0)
             {
                 await new ParseErrorWriter(_connection).WriteAsync(
-                    runId, businessDate, sourceFileId: null,
+                    runId, businessDate, sourceFileId,
                     errors.Select(e => new ParseErrorRow(
                         e.Type.ToString(), e.FieldCode, e.Message, e.RawRowNumber, e.RawLine))
                         .ToList(),
@@ -157,7 +159,15 @@ public sealed class FileStager(SqlConnection connection)
 
             IEnumerable<StagingRecord> Records()
             {
-                var record = new StagingRecord { DatasetId = dataset.DatasetId, LoadRunId = runId };
+                // Every staged row carries the file it came from, so "which
+                // file produced this row" is answerable from stg.StagingTransaction
+                // rather than from the order the files happened to load in.
+                var record = new StagingRecord
+                {
+                    DatasetId = dataset.DatasetId,
+                    LoadRunId = runId,
+                    SourceFileId = sourceFileId,
+                };
 
                 foreach (var row in reader.Read(source))
                 {

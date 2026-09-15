@@ -60,6 +60,13 @@ public sealed class DatasetsController(
             && grants.TryGetValue(selected.CounterpartyId, out var level)
             && level >= AccessLevel.Configure;
 
+        // Checking a folder is an operator's action, not a configurer's: it
+        // asks whether tonight's file is there, which is the same question
+        // triggering a run asks.
+        ViewData["CanOperate"] = selected is not null
+            && grants.TryGetValue(selected.CounterpartyId, out var operate)
+            && operate >= AccessLevel.Operate;
+
         // The file formats and, for the one being looked at, its mappings.
         // A dataset without a format cannot be loaded at all — the parser
         // would have to guess a layout — so the screen shows the absence
@@ -78,6 +85,19 @@ public sealed class DatasetsController(
         ViewData["Mappings"] = format is null
             ? new List<MappingRow>()
             : await MappingsAsync(format.FileFormatId).ConfigureAwait(false);
+
+        // Where the dataset's files come from, and what has actually arrived.
+        // Both belong on this screen because the question an operator asks at
+        // 8am — "did last night's file come in" — is about this dataset, and
+        // the answer used to need a query window.
+        ViewData["Acquisition"] = selected is null
+            ? null
+            : await AcquisitionAsync(selected.DatasetId).ConfigureAwait(false);
+
+        ViewData["SourceFiles"] = selected is null
+            ? new List<SourceFileRecord>()
+            : await new SourceFileRepository(connection)
+                .RecentAsync(selected.DatasetId).ConfigureAwait(false);
 
         return View();
     }
@@ -469,6 +489,244 @@ public sealed class DatasetsController(
         return RedirectToAction(nameof(Index), new { id = datasetId, formatId = fileFormatId });
     }
 
+    /// <summary>
+    /// Where this dataset's files come from.
+    ///
+    /// <para>
+    /// Only <c>Folder</c> and <c>Manual</c> are offered, because only those
+    /// two exist: <c>FolderAcquisition</c> is the provider, and an upload is
+    /// what Manual means. Sftp and Api are in the schema's list and have no
+    /// provider, so storing them here would be configuration that fetches
+    /// nothing — which looks like coverage and is worse than a blank.
+    /// </para>
+    ///
+    /// <para>
+    /// The folder is read by the portal's own process, so the path is the
+    /// server's, not the operator's workstation's. It is required to be
+    /// absolute for that reason: a relative path would resolve against
+    /// whatever directory the process happens to run in.
+    /// </para>
+    /// </summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> SaveAcquisition(
+        int datasetId,
+        int? acquisitionId,
+        string method,
+        string? storageRootPath,
+        int retryCount,
+        int retryDelaySeconds)
+    {
+        var counterpartyId = await CounterpartyOfDatasetAsync(datasetId).ConfigureAwait(false);
+        await access.RequireAsync(User, counterpartyId, AccessLevel.Configure).ConfigureAwait(false);
+
+        if (method is not ("Folder" or "Manual"))
+        {
+            TempData["Error"] =
+                $"{method} has no provider. Folder acquisition and portal uploads (Manual) are " +
+                "what exist; storing a method that fetches nothing would look like coverage.";
+
+            return RedirectToAction(nameof(Index), new { id = datasetId });
+        }
+
+        // StorageRootPath is NOT NULL in the schema even for Manual, where it
+        // is where uploads are kept rather than where files are found.
+        var root = (storageRootPath ?? string.Empty).Trim();
+        string? warning = null;
+
+        if (method == "Folder")
+        {
+            if (root.Length == 0)
+            {
+                TempData["Error"] = "Folder acquisition needs the folder to watch.";
+                return RedirectToAction(nameof(Index), new { id = datasetId });
+            }
+
+            if (!Path.IsPathRooted(root))
+            {
+                TempData["Error"] =
+                    $"'{root}' is not an absolute path. The folder is read by the server's own " +
+                    "process, so a relative path would resolve against whatever directory that " +
+                    "process happens to be started in.";
+
+                return RedirectToAction(nameof(Index), new { id = datasetId });
+            }
+
+            var format = (await FormatsAsync(datasetId).ConfigureAwait(false))
+                .FirstOrDefault(f => f.CoversToday);
+
+            if (format is not null && string.IsNullOrWhiteSpace(format.FileNamePattern))
+            {
+                warning =
+                    "Saved, but the file format covering today has no file-name pattern — " +
+                    "acquisition cannot tell which file in that folder is the day's. Add one to " +
+                    "the format above.";
+            }
+        }
+        else if (root.Length == 0)
+        {
+            root = "(uploaded)";
+        }
+
+        if (retryCount < 0 || retryDelaySeconds < 0)
+        {
+            TempData["Error"] = "Retries and the delay between them cannot be negative.";
+            return RedirectToAction(nameof(Index), new { id = datasetId });
+        }
+
+        try
+        {
+            if (acquisitionId is { } existing)
+            {
+                await Db.ExecuteAsync(
+                    connection,
+                    """
+                    UPDATE cfg.AcquisitionDefinition
+                    SET Method = @method, StorageRootPath = @root,
+                        RetryCount = @retries, RetryDelaySeconds = @delay
+                    WHERE AcquisitionId = @id AND DatasetId = @ds;
+                    """,
+                    c => c.With("@id", existing)
+                          .With("@ds", datasetId)
+                          .With("@method", method)
+                          .With("@root", root)
+                          .With("@retries", retryCount)
+                          .With("@delay", retryDelaySeconds)).ConfigureAwait(false);
+
+                await audit.RecordAsync(User, "AcquisitionDefinition", existing, AuditAction.Update,
+                    after: new { datasetId, method, root, retryCount, retryDelaySeconds })
+                    .ConfigureAwait(false);
+            }
+            else
+            {
+                var id = await Db.ScalarAsync<int>(
+                    connection,
+                    """
+                    INSERT cfg.AcquisitionDefinition
+                        (DatasetId, Method, StorageRootPath, RetryCount, RetryDelaySeconds)
+                    VALUES (@ds, @method, @root, @retries, @delay);
+                    SELECT CAST(SCOPE_IDENTITY() AS INT);
+                    """,
+                    c => c.With("@ds", datasetId)
+                          .With("@method", method)
+                          .With("@root", root)
+                          .With("@retries", retryCount)
+                          .With("@delay", retryDelaySeconds)).ConfigureAwait(false);
+
+                await audit.RecordAsync(User, "AcquisitionDefinition", id, AuditAction.Create,
+                    after: new { datasetId, method, root, retryCount, retryDelaySeconds })
+                    .ConfigureAwait(false);
+            }
+
+            if (warning is not null)
+            {
+                TempData["Warn"] = warning;
+            }
+            else
+            {
+                TempData["Ok"] = method == "Folder"
+                    ? $"Acquisition saved: files are picked up from {root}."
+                    : "Acquisition saved: files are uploaded through the portal.";
+            }
+        }
+        catch (Microsoft.Data.SqlClient.SqlException ex)
+        {
+            TempData["Error"] = "The database refused this acquisition: " + ex.Message;
+        }
+
+        return RedirectToAction(nameof(Index), new { id = datasetId });
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> DeleteAcquisition(int datasetId, int acquisitionId)
+    {
+        var counterpartyId = await CounterpartyOfDatasetAsync(datasetId).ConfigureAwait(false);
+        await access.RequireAsync(User, counterpartyId, AccessLevel.Configure).ConfigureAwait(false);
+
+        await Db.ExecuteAsync(
+            connection,
+            "DELETE cfg.AcquisitionDefinition WHERE AcquisitionId = @id AND DatasetId = @ds;",
+            c => c.With("@id", acquisitionId).With("@ds", datasetId)).ConfigureAwait(false);
+
+        await audit.RecordAsync(User, "AcquisitionDefinition", acquisitionId, AuditAction.Delete)
+            .ConfigureAwait(false);
+
+        TempData["Ok"] =
+            "Acquisition removed. This dataset's files are uploaded from now on; a scheduled run " +
+            "will reconcile whatever is already staged.";
+
+        return RedirectToAction(nameof(Index), new { id = datasetId });
+    }
+
+    /// <summary>
+    /// Asks the folder what it holds for a business date, without recording
+    /// or staging anything.
+    ///
+    /// <para>
+    /// This is the button that answers "will tonight's run find the file",
+    /// which is the question the whole provider exists to make answerable
+    /// before 3am rather than after it. It records nothing on purpose:
+    /// checking is not consuming.
+    /// </para>
+    /// </summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> CheckAcquisition(
+        int datasetId, DateOnly businessDate, string? sessionRef,
+        CancellationToken cancellationToken)
+    {
+        var counterpartyId = await CounterpartyOfDatasetAsync(datasetId).ConfigureAwait(false);
+        await access.RequireAsync(User, counterpartyId, AccessLevel.Operate, cancellationToken)
+            .ConfigureAwait(false);
+
+        var dataset = await config.LoadDatasetAsync(datasetId, cancellationToken)
+            .ConfigureAwait(false);
+
+        try
+        {
+            var outcome = await new Recon.Engine.Providers.FolderAcquisition(connection)
+                .AcquireAsync(dataset, businessDate, sessionRef, record: false, cancellationToken)
+                .ConfigureAwait(false);
+
+            TempData[outcome.State == Recon.Engine.Providers.AcquisitionState.NotFound
+                ? "Warn"
+                : "Ok"] = outcome.Message;
+        }
+        catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException
+                                      or IOException or UnauthorizedAccessException)
+        {
+            TempData["Error"] = ex.Message;
+        }
+
+        return RedirectToAction(nameof(Index), new { id = datasetId });
+    }
+
+    private async Task<AcquisitionRow?> AcquisitionAsync(int datasetId)
+    {
+        var rows = await Db.QueryAsync(
+            connection,
+            """
+            SELECT AcquisitionId, Method, StorageRootPath, RetryCount, RetryDelaySeconds
+            FROM cfg.AcquisitionDefinition
+            WHERE DatasetId = @ds
+            ORDER BY AcquisitionId;
+            """,
+            r => new AcquisitionRow
+            {
+                AcquisitionId = r.GetInt32(0),
+                Method = r.GetString(1),
+                StorageRootPath = r.GetString(2),
+                RetryCount = r.GetInt32(3),
+                RetryDelaySeconds = r.GetInt32(4),
+            },
+            c => c.With("@ds", datasetId)).ConfigureAwait(false);
+
+        // FolderAcquisition reads the lowest id, so the screen shows the one
+        // that would actually run rather than a list that hides which wins.
+        return rows.Count == 0 ? null : rows[0];
+    }
+
     private Task<List<FormatRow>> FormatsAsync(int datasetId) =>
         Db.QueryAsync(
             connection,
@@ -785,6 +1043,15 @@ public sealed record FormatRow
     public bool CoversToday =>
         EffectiveFrom <= DateOnly.FromDateTime(DateTime.Today)
         && (EffectiveTo is null || EffectiveTo >= DateOnly.FromDateTime(DateTime.Today));
+}
+
+public sealed record AcquisitionRow
+{
+    public required int AcquisitionId { get; init; }
+    public required string Method { get; init; }
+    public required string StorageRootPath { get; init; }
+    public required int RetryCount { get; init; }
+    public required int RetryDelaySeconds { get; init; }
 }
 
 public sealed record MappingRow

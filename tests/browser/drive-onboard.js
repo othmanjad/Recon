@@ -18,6 +18,11 @@
    a matching pass, activates all of it, uploads two files it writes
    itself, and asserts the run matched what those files were built to
    match. No SQL anywhere.
+
+   Then it does the same day's work the way a scheduled night does it:
+   configures folder acquisition, gives the format a file-name pattern,
+   drops the day's file — and the wrong day's beside it — into the watched
+   directory, and triggers a run with nothing uploaded at all.
    ===================================================================== */
 
 const { chromium } = require("playwright");
@@ -34,6 +39,13 @@ fs.mkdirSync(OUT, { recursive: true });
    counterparty the last run created. */
 const TAG = "ZZ" + Date.now().toString().slice(-6);
 const BUSINESS_DATE = "2026-09-13";
+
+/* A second business date, reconciled from a watched folder rather than from
+   an upload. A different date is what makes the {yyyyMMdd} substitution in
+   the file-name pattern testable: the wrong day's file is in the same folder
+   and must not be picked. */
+const ACQUIRE_DATE = "2026-09-14";
+const ACQUIRE_COMPACT = ACQUIRE_DATE.replace(/-/g, "");
 
 const problems = [];
 let checks = 0;
@@ -82,24 +94,32 @@ const RIGHT_FIELDS = [
 ];
 
 /* Two files that agree on two references and disagree on one each way,
-   so the run has something to match and something to leave open. */
-const LEFT_CSV = [
-    "reference,amount,currency,posted,direction,status",
-    `${TAG}-0001,1500,JOD,${BUSINESS_DATE} 09:15:00,Inward,ACSC`,
-    `${TAG}-0002,2750,JOD,${BUSINESS_DATE} 10:30:00,Outward,ACSC`,
-    `${TAG}-0009,400,JOD,${BUSINESS_DATE} 11:00:00,Inward,ACSC`,
-    // Rejected by the scheme: the exclusion rule takes it out before pass 1,
-    // and it must NOT become an exception — a rejected transaction is not a
-    // break.
-    `${TAG}-0099,650,JOD,${BUSINESS_DATE} 11:30:00,Inward,RJCT`,
-].join("\n") + "\n";
+   so the run has something to match and something to leave open. The
+   fourth left-hand row is rejected by the scheme: the exclusion rule takes
+   it out before pass 1, and it must NOT become an exception — a rejected
+   transaction is not a break. */
+const LEFT_CSV = csvFor(BUSINESS_DATE).left;
+const RIGHT_CSV = csvFor(BUSINESS_DATE).right;
 
-const RIGHT_CSV = [
-    "ref,amount,ccy,value_date,dir",
-    `${TAG}-0001,1500,JOD,${BUSINESS_DATE} 09:16:00,Inward`,
-    `${TAG}-0002,2750,JOD,${BUSINESS_DATE} 10:31:00,Outward`,
-    `${TAG}-0007,900,JOD,${BUSINESS_DATE} 12:00:00,Inward`,
-].join("\n") + "\n";
+/* The same shape of data for the acquisition date: the counts the run is
+   asserted on are the counts these rows produce. */
+function csvFor(date) {
+    return {
+        left: [
+            "reference,amount,currency,posted,direction,status",
+            `${TAG}-0001,1500,JOD,${date} 09:15:00,Inward,ACSC`,
+            `${TAG}-0002,2750,JOD,${date} 10:30:00,Outward,ACSC`,
+            `${TAG}-0009,400,JOD,${date} 11:00:00,Inward,ACSC`,
+            `${TAG}-0099,650,JOD,${date} 11:30:00,Inward,RJCT`,
+        ].join("\n") + "\n",
+        right: [
+            "ref,amount,ccy,value_date,dir",
+            `${TAG}-0001,1500,JOD,${date} 09:16:00,Inward`,
+            `${TAG}-0002,2750,JOD,${date} 10:31:00,Outward`,
+            `${TAG}-0007,900,JOD,${date} 12:00:00,Inward`,
+        ].join("\n") + "\n",
+    };
+}
 
 (async () => {
     const launch = process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {};
@@ -485,13 +505,216 @@ const RIGHT_CSV = [
 
     await shot(page, "onboard-5-exceptions");
 
+    // =================================================================
+    // 8. Acquisition: the same reconciliation again, from a watched
+    //    folder, with nothing uploaded.
+    // =================================================================
+    step("phase 8: acquisition");
+
+    /* The folder is read by the PORTAL's process. In the demo that process
+       runs in a container with the repository mounted at /src, so the path
+       the form stores is the server's view of the directory and the path
+       this driver writes to is the host's. Both are overridable for a
+       portal started some other way. */
+    const inboxHost = process.env.ACQUIRE_HOST_ROOT
+        || path.join(__dirname, ".shots", "inbox-" + TAG);
+    const inboxServer = process.env.ACQUIRE_SERVER_ROOT
+        || "/src/tests/browser/.shots/inbox-" + TAG;
+
+    const leftInboxHost = path.join(inboxHost, "left");
+    const rightInboxHost = path.join(inboxHost, "right");
+
+    fs.mkdirSync(leftInboxHost, { recursive: true });
+    fs.mkdirSync(rightInboxHost, { recursive: true });
+
+    // Only the two methods that have a provider are offered. Sftp and Api
+    // are in the database's list and implement nothing.
+    await page.goto(`${BASE}/datasets?id=${leftId}`, { waitUntil: "load" });
+
+    const methods = await page.locator("#rc-acq-method option")
+        .evaluateAll(options => options.map(o => o.value));
+
+    check(methods.length === 2 && methods.includes("Folder") && methods.includes("Manual"),
+        `the acquisition method list should offer only Folder and Manual: ${methods.join(", ")}`);
+
+    /* And the server refuses them too, through a POST the select never sees.
+       A method that stored configuration and fetched nothing would look like
+       coverage, which is worse than a blank. */
+    const acqToken = await page
+        .locator('form[action*="/Datasets/SaveAcquisition"] input[name="__RequestVerificationToken"]')
+        .getAttribute("value");
+
+    const sftp = await context.request.post(`${BASE}/Datasets/SaveAcquisition`, {
+        form: {
+            __RequestVerificationToken: acqToken ?? "",
+            datasetId: String(leftId),
+            method: "Sftp",
+            storageRootPath: inboxServer,
+            retryCount: "3",
+            retryDelaySeconds: "60",
+        },
+        maxRedirects: 0,
+    });
+
+    check(sftp.status() === 302,
+        `a crafted Sftp POST answered ${sftp.status()} rather than redirecting with a message`);
+
+    await page.goto(`${BASE}/datasets?id=${leftId}`, { waitUntil: "load" });
+    body = await page.locator("body").innerText();
+
+    check(/Sftp has no provider/.test(body),
+        `the server accepted an acquisition method with no provider: ${firstAlert(body)}`);
+    check(/not configured: files are uploaded/.test(body),
+        "the refused method was stored anyway");
+
+    // A relative path is refused: the folder is read by the server's process,
+    // wherever that happens to have been started.
+    await page.selectOption("#rc-acq-method", "Folder");
+    await page.fill("#rc-acq-root", "inbox");
+    await submit(page, page.locator('form[action*="/Datasets/SaveAcquisition"] button[type="submit"]'), 60000);
+
+    body = await page.locator("body").innerText();
+    check(/is not an absolute path/.test(body),
+        `a relative acquisition folder was accepted: ${firstAlert(body)}`);
+
+    // Saved, but the format has no file-name pattern yet — so the screen
+    // says what is still missing rather than looking finished.
+    await saveAcquisition(leftId, path.posix.join(inboxServer, "left"));
+    body = await page.locator("body").innerText();
+
+    check(/no file-name pattern/.test(body),
+        `saving a folder with no file-name pattern said nothing about it: ${firstAlert(body)}`);
+
+    await saveAcquisition(rightId, path.posix.join(inboxServer, "right"));
+
+    // The pattern, per side. {yyyyMMdd} is substituted before it is matched.
+    await setFileNamePattern(leftId, leftFormatId, `^${leftCode}_{yyyyMMdd}.*\.csv$`);
+    await setFileNamePattern(rightId, rightFormatId, `^${rightCode}_{yyyyMMdd}.*\.csv$`);
+
+    // Nothing in the folder yet: the file-not-received condition, which must
+    // be distinguishable from a session that is not due.
+    await checkFolder(leftId);
+    body = await page.locator("body").innerText();
+
+    check(/no file in .* matches/.test(body),
+        `an empty folder did not report the file as not received: ${firstAlert(body)}`);
+
+    // Now the day's files, and the wrong day's beside them.
+    const acquire = csvFor(ACQUIRE_DATE);
+
+    fs.writeFileSync(
+        path.join(leftInboxHost, `${leftCode}_${ACQUIRE_COMPACT}.csv`), acquire.left);
+    fs.writeFileSync(
+        path.join(rightInboxHost, `${rightCode}_${ACQUIRE_COMPACT}.csv`), acquire.right);
+
+    // The decoy: same dataset, a different business date. If the date were
+    // not substituted into the pattern this would be a second match and the
+    // acquisition would refuse to guess between them.
+    fs.writeFileSync(
+        path.join(leftInboxHost, `${leftCode}_20250101.csv`), csvFor("2025-01-01").left);
+
+    const arrivalsBefore = await arrivalCount(leftId);
+
+    await checkFolder(leftId);
+    body = await page.locator("body").innerText();
+
+    check(new RegExp(`${leftCode}_${ACQUIRE_COMPACT}\.csv`).test(body)
+        && /waiting in the folder/.test(body),
+        `checking the folder did not find the day's file: ${firstAlert(body)}`);
+
+    check(await arrivalCount(leftId) === arrivalsBefore,
+        "checking the folder recorded an arrival — checking is not consuming");
+
+    await shot(page, "onboard-6-acquisition");
+
+    // The run, with nothing uploaded: the plain trigger, which is what the
+    // scheduler does at 22:00.
+    await page.goto(BASE + "/runs", { waitUntil: "load" });
+    await page.selectOption("#definitionId", await optionValue("#definitionId", TAG + "_RECON"));
+    await page.fill("#businessDate", ACQUIRE_DATE);
+    await page.fill("#sessionRef", "S1");
+
+    await submit(page, page.locator('form[action*="/Runs/Trigger"] button[type="submit"]'), 300000);
+
+    body = await page.locator("body").innerText();
+
+    check(/acquired/.test(body),
+        `the run did not fetch the files itself: ${firstAlert(body)}`);
+    check(new RegExp(`${leftCode}_${ACQUIRE_COMPACT}\.csv`).test(body),
+        `the run did not name the file it acquired: ${firstAlert(body)}`);
+    check(/completed/i.test(body),
+        `the acquired run did not complete: ${firstAlert(body)}`);
+    check(/4 matched/.test(body), `the acquired run: expected 4 matched: ${firstAlert(body)}`);
+    check(/2 unmatched/.test(body), `the acquired run: expected 2 unmatched: ${firstAlert(body)}`);
+    check(/0 ambiguous/.test(body), `the acquired run: expected 0 ambiguous: ${firstAlert(body)}`);
+
+    await shot(page, "onboard-7-acquired-run");
+
+    /* The file's life, not only its arrival: an operator asking "did last
+       night's file load, and how many rows did it reject" is asking this
+       table. */
+    await page.goto(`${BASE}/datasets?id=${leftId}`, { waitUntil: "load" });
+    const arrival = await page.locator("#rc-acquisition tbody tr").first().innerText();
+
+    check(arrival.includes(`${leftCode}_${ACQUIRE_COMPACT}.csv`),
+        `the acquired file is not the newest arrival: ${arrival.replace(/\n/g, " | ")}`);
+    check(/Parsed/.test(arrival),
+        `the acquired file was not recorded as parsed: ${arrival.replace(/\n/g, " | ")}`);
+    check(/\b4\b/.test(arrival),
+        `the acquired file's row count was not recorded: ${arrival.replace(/\n/g, " | ")}`);
+
+    // The same content again is a duplicate, not a second arrival — and the
+    // run is still allowed, because a retry after a fix is legitimate.
+    await page.goto(BASE + "/runs", { waitUntil: "load" });
+    await page.selectOption("#definitionId", await optionValue("#definitionId", TAG + "_RECON"));
+    await page.fill("#businessDate", ACQUIRE_DATE);
+    await page.fill("#sessionRef", "S2");
+
+    await submit(page, page.locator('form[action*="/Runs/Trigger"] button[type="submit"]'), 300000);
+
+    body = await page.locator("body").innerText();
+
+    check(/same content as a file already received/.test(body),
+        `the same file twice was not reported as a duplicate: ${firstAlert(body)}`);
+    check(/completed/i.test(body),
+        `the re-run over the duplicate did not complete: ${firstAlert(body)}`);
+
+    // Two files matching the same pattern: refused rather than guessed at.
+    fs.writeFileSync(
+        path.join(leftInboxHost, `${leftCode}_${ACQUIRE_COMPACT}_late.csv`), acquire.left);
+
+    await checkFolder(leftId);
+    body = await page.locator("body").innerText();
+
+    check(/2 files in .* match/.test(body),
+        `two matching files were not refused: ${firstAlert(body)}`);
+    check(/not something to guess at/.test(body),
+        "the refusal did not say why it will not choose");
+
+    fs.rmSync(path.join(leftInboxHost, `${leftCode}_${ACQUIRE_COMPACT}_late.csv`));
+
+    // And it can be taken away again: the dataset goes back to uploads, which
+    // is what a partner switching to sending files by hand looks like.
+    await page.goto(`${BASE}/datasets?id=${leftId}`, { waitUntil: "load" });
+    await submit(page, page.locator('form[action*="/Datasets/DeleteAcquisition"] button[type="submit"]'), 60000);
+
+    body = await page.locator("body").innerText();
+
+    check(/Acquisition removed/.test(body),
+        `removing the acquisition was refused: ${firstAlert(body)}`);
+    check(/not configured: files are uploaded/.test(body),
+        "the acquisition card still claims a folder after the acquisition was removed");
+
+
     await context.close();
     await browser.close();
 
     console.log(`\n${checks} checks`);
 
     if (problems.length === 0) {
-        console.log(`ALL GREEN — ${TAG}_BANK was onboarded through the portal alone`);
+        console.log(
+            `ALL GREEN — ${TAG}_BANK was onboarded through the portal alone, ` +
+            "and its second day was reconciled from a watched folder");
         process.exit(0);
     }
 
@@ -589,6 +812,51 @@ const RIGHT_CSV = [
         const text = await page.locator("body").innerText();
         check(new RegExp("Classification " + code + " saved").test(text),
             `${code} was not saved: ${firstAlert(text)}`);
+    }
+
+    async function saveAcquisition(datasetId, serverRoot) {
+        await page.goto(`${BASE}/datasets?id=${datasetId}`, { waitUntil: "load" });
+
+        await page.selectOption("#rc-acq-method", "Folder");
+        await page.fill("#rc-acq-root", serverRoot);
+
+        await submit(page, page.locator('form[action*="/Datasets/SaveAcquisition"] button[type="submit"]'), 60000);
+    }
+
+    /* Editing the format in force, which is how the pattern gets there. The
+       form is asserted to have been PREFILLED from the selected version
+       first: a form showing defaults beside a dropdown reading "v1" is a
+       form that invites saving the wrong thing. */
+    async function setFileNamePattern(datasetId, formatId, pattern) {
+        step("pattern for dataset " + datasetId);
+        await page.goto(`${BASE}/datasets?id=${datasetId}&formatId=${formatId}`, { waitUntil: "load" });
+
+        check(await page.inputValue("#delimiter") === ",",
+            "the format form did not prefill the delimiter of the version being edited");
+        check(await page.inputValue("#effectiveFrom") === "2026-01-01",
+            "the format form did not prefill the effective date of the version being edited");
+
+        await page.fill("#fileNamePattern", pattern);
+        await submit(page, page.locator('form[action*="/Datasets/SaveFormat"] button[type="submit"]'), 60000);
+
+        const text = await page.locator("body").innerText();
+        check(/Format version \d+ saved/.test(text),
+            `the file-name pattern was not saved for dataset ${datasetId}: ${firstAlert(text)}`);
+    }
+
+    async function checkFolder(datasetId) {
+        await page.goto(`${BASE}/datasets?id=${datasetId}`, { waitUntil: "load" });
+        await page.fill("#rc-acq-date", ACQUIRE_DATE);
+        await page.fill("#rc-acq-session", "S1");
+
+        await submit(page, page.locator('form[action*="/Datasets/CheckAcquisition"] button[type="submit"]'), 60000);
+    }
+
+    async function arrivalCount(datasetId) {
+        await page.goto(`${BASE}/datasets?id=${datasetId}`, { waitUntil: "load" });
+
+        const empty = await page.locator("#rc-acquisition tbody .rc-empty").count();
+        return empty > 0 ? 0 : await page.locator("#rc-acquisition tbody tr").count();
     }
 
     async function optionValue(selector, label) {

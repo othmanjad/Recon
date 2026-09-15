@@ -2,6 +2,7 @@ using Microsoft.Data.SqlClient;
 using Recon.Data;
 using Recon.Domain.Configuration;
 using Recon.Engine;
+using Recon.Engine.Providers;
 using Recon.Engine.Staging;
 
 namespace Recon.Web.Services;
@@ -105,10 +106,23 @@ public sealed class SessionRunner(
     }
 
     /// <summary>
-    /// Runs one session. <paramref name="leftFile"/> and
-    /// <paramref name="rightFile"/> are optional: a Rematch supplies neither
-    /// and reads the source run's rows, and a run whose acquisition already
-    /// staged its data supplies neither either.
+    /// Runs one session. The files are optional in three different ways, and
+    /// the difference matters:
+    ///
+    /// <list type="bullet">
+    /// <item>an upload supplies them, and they are recorded and staged;</item>
+    /// <item>a Rematch supplies neither and reads the source run's rows;</item>
+    /// <item>a plain trigger or a scheduled run supplies neither, and each
+    /// side's own acquisition is asked for the day's file.</item>
+    /// </list>
+    ///
+    /// <para>
+    /// Acquisition happens after the lock and before the run row exists, so a
+    /// day whose file never arrived is recorded as <c>Rejected</c> with the
+    /// reason rather than as a run that reconciled nothing. An empty
+    /// reconciliation and a missing file look identical on a dashboard and are
+    /// not the same event.
+    /// </para>
     /// </summary>
     public async Task<SessionOutcome> RunAsync(
         System.Security.Claims.ClaimsPrincipal? user,
@@ -117,8 +131,8 @@ public sealed class SessionRunner(
         string? sessionRef,
         RunType runType,
         string triggeredBy,
-        string? leftFile = null,
-        string? rightFile = null,
+        StoredFile? leftFile = null,
+        StoredFile? rightFile = null,
         long? sourceRunId = null,
         CancellationToken cancellationToken = default)
     {
@@ -152,6 +166,88 @@ public sealed class SessionRunner(
 
         try
         {
+            var files = new SourceFileRepository(_connection);
+            var acquired = new List<AcquisitionOutcome>();
+            var inputs = new Dictionary<Side, (string Path, long SourceFileId)>();
+
+            foreach (var (side, upload) in new[]
+                     {
+                         (Side.Left, leftFile),
+                         (Side.Right, rightFile),
+                     })
+            {
+                var dataset = definition.DatasetFor(side);
+
+                if (upload is not null)
+                {
+                    // An upload is an arrival too: the same ops.SourceFile row
+                    // an acquired file gets, so the audit trail does not
+                    // depend on how the bytes got here.
+                    var record = await files.RecordAsync(
+                        dataset.DatasetId, Path.GetFileName(upload.Path), upload.Path,
+                        upload.Sha256, upload.Bytes, businessDate, sessionRef, cancellationToken)
+                        .ConfigureAwait(false);
+
+                    inputs[side] = (upload.Path, record.SourceFileId);
+
+                    acquired.Add(record.IsDuplicate
+                        ? AcquisitionOutcome.Duplicate(
+                            dataset.Code, upload.Path, upload.Sha256, record.SourceFileId, record.Status)
+                        : AcquisitionOutcome.Uploaded(
+                            dataset.Code, upload.Path, upload.Sha256, record.SourceFileId, upload.Bytes));
+
+                    continue;
+                }
+
+                // A Rematch reads the source run's staged rows; asking a
+                // folder for a file it already consumed would be wrong.
+                if (sourceRunId is not null)
+                {
+                    continue;
+                }
+
+                AcquisitionOutcome outcome;
+
+                try
+                {
+                    outcome = await new FolderAcquisition(_connection)
+                        .AcquireAsync(dataset, businessDate, sessionRef,
+                            cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is NotSupportedException or InvalidOperationException
+                                              or IOException or UnauthorizedAccessException)
+                {
+                    // A method with no provider, a folder that is not there,
+                    // two files that both match: all of them mean the day's
+                    // file is not established, and none of them is a run.
+                    await _runs.RecordRejectedAsync(
+                        definitionId, definition.Version, businessDate, sessionRef, runType,
+                        triggeredBy, ex.Message, cancellationToken).ConfigureAwait(false);
+
+                    return SessionOutcome.Refused(ex.Message);
+                }
+
+                acquired.Add(outcome);
+
+                if (outcome.State == AcquisitionState.NotFound)
+                {
+                    await _runs.RecordRejectedAsync(
+                        definitionId, definition.Version, businessDate, sessionRef, runType,
+                        triggeredBy, outcome.Message, cancellationToken).ConfigureAwait(false);
+
+                    return SessionOutcome.Refused(
+                        outcome.Message +
+                        " The attempt is recorded as Rejected: a file that never arrived is not a " +
+                        "run that matched nothing.");
+                }
+
+                if (outcome.Path is not null && outcome.SourceFileId is { } id)
+                {
+                    inputs[side] = (outcome.Path, id);
+                }
+            }
+
             var run = await _runs.CreateRunAsync(
                 definition, businessDate, sessionRef, runType, triggeredBy, sourceRunId,
                 cancellationToken).ConfigureAwait(false);
@@ -167,28 +263,49 @@ public sealed class SessionRunner(
 
             // Rows are staged UNDER a run id, so the load follows the run's
             // creation rather than preceding it.
-            if (leftFile is not null)
+            foreach (var side in new[] { Side.Left, Side.Right })
             {
-                staged.Add(await stager.StageAsync(
-                    definition, Side.Left, run.RunId, businessDate, leftFile, _runs, cancellationToken)
-                    .ConfigureAwait(false));
+                if (!inputs.TryGetValue(side, out var input))
+                {
+                    continue;
+                }
+
+                StageOutcome outcome;
+
+                try
+                {
+                    outcome = await stager.StageAsync(
+                        definition, side, run.RunId, businessDate, input.Path, _runs,
+                        input.SourceFileId, cancellationToken).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // The file arrived and could not be read. Recording that
+                    // against the file is the difference between "no statement
+                    // yesterday" and "yesterday's statement was unreadable".
+                    await files.RecordParsedAsync(
+                        input.SourceFileId, businessDate, 0, 0, failed: true,
+                        CancellationToken.None).ConfigureAwait(false);
+
+                    throw;
+                }
+
+                await files.RecordParsedAsync(
+                    input.SourceFileId, businessDate, outcome.RowsWritten, outcome.Errors.Count,
+                    failed: false, cancellationToken).ConfigureAwait(false);
+
+                staged.Add(outcome);
             }
 
-            if (rightFile is not null)
-            {
-                staged.Add(await stager.StageAsync(
-                    definition, Side.Right, run.RunId, businessDate, rightFile, _runs, cancellationToken)
-                    .ConfigureAwait(false));
-            }
-
-            var outcome = await new ReconciliationRunner(_connection, _runs)
+            var result = await new ReconciliationRunner(_connection, _runs)
                 .ExecuteAsync(definition, run, cancellationToken).ConfigureAwait(false);
 
             return new SessionOutcome
             {
                 RunId = run.RunId,
                 Staged = staged,
-                Outcome = outcome,
+                Acquired = acquired,
+                Outcome = result,
                 Refusal = null,
             };
         }
@@ -213,6 +330,13 @@ public sealed record SessionOutcome
 {
     public long? RunId { get; init; }
     public IReadOnlyList<StageOutcome> Staged { get; init; } = [];
+
+    /// <summary>
+    /// What each side's file did: acquired from its folder, uploaded, already
+    /// received, or nothing to fetch. Empty for a Rematch, which reads the
+    /// source run's rows.
+    /// </summary>
+    public IReadOnlyList<AcquisitionOutcome> Acquired { get; init; } = [];
     public RunOutcome? Outcome { get; init; }
 
     /// <summary>

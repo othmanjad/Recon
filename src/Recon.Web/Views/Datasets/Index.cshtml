@@ -11,7 +11,10 @@
     var formats = (List<FormatRow>)ViewData["Formats"]!;
     var format = ViewData["Format"] as FormatRow;
     var mappings = (List<MappingRow>)ViewData["Mappings"]!;
+    var acquisition = ViewData["Acquisition"] as AcquisitionRow;
+    var arrivals = (List<Recon.Data.SourceFileRecord>)ViewData["SourceFiles"]!;
     var canConfigure = ViewData["CanConfigure"] is true;
+    var canOperate = ViewData["CanOperate"] is true;
     var today = DateOnly.FromDateTime(DateTime.Today);
 
     var usedSlots = selected?.Fields.Select(f => f.StorageSlot).ToHashSet(StringComparer.Ordinal)
@@ -878,6 +881,197 @@ else
             }
         </div>
     }
+
+    @*
+        Where the files come from. Without this the platform could only
+        reconcile what somebody had already uploaded, which makes "runs
+        unattended for a full week" untrue however good the scheduler is.
+    *@
+    <div class="rc-card mt-3" id="rc-acquisition">
+        <div class="rc-card-head">
+            <h2>Acquisition — where @selected.Code's files come from</h2>
+            <span class="rc-help">
+                @(acquisition is null
+                    ? "not configured: files are uploaded"
+                    : acquisition.Method == "Folder"
+                        ? "folder: " + acquisition.StorageRootPath
+                        : "manual: files are uploaded")
+            </span>
+        </div>
+
+        <div class="alert alert-light border small mb-3">
+            <strong>Folder</strong> means the scheduler picks the day's file out of a directory on
+            <em>the server</em>, using the file-name pattern of the format above — so
+            <code>{yyyyMMdd}</code>, <code>{yyyy-MM-dd}</code>, <code>{ddMMyyyy}</code>,
+            <code>{yyyy}</code>, <code>{MM}</code>, <code>{dd}</code> and <code>{session}</code>
+            are substituted before it is matched as a regex.
+            <strong>Manual</strong> means the file is uploaded from the Runs screen.
+            <strong>Sftp</strong> and <strong>Api</strong> are in the database's list of methods and
+            have no provider yet; they are refused here rather than stored, because configuration
+            that fetches nothing looks like coverage.
+            Two files matching the same pattern is refused too — which of them is the day's truth is
+            not something to guess at.
+        </div>
+
+        <div class="row g-3">
+            <div class="col-12 col-xl-6">
+                @if (canConfigure)
+                {
+                    <form method="post" asp-action="SaveAcquisition" class="row g-2">
+                        <input type="hidden" name="datasetId" value="@selected.DatasetId" />
+                        @if (acquisition is not null)
+                        {
+                            <input type="hidden" name="acquisitionId" value="@acquisition.AcquisitionId" />
+                        }
+
+                        <div class="col-12 col-sm-4">
+                            <label class="form-label" for="rc-acq-method">Method</label>
+                            <select class="form-select" id="rc-acq-method" name="method">
+                                <option value="Folder" selected="@(acquisition?.Method == "Folder")">Folder</option>
+                                <option value="Manual" selected="@(acquisition is null || acquisition.Method == "Manual")">Manual (uploaded)</option>
+                            </select>
+                        </div>
+
+                        <div class="col-12 col-sm-8">
+                            <label class="form-label" for="rc-acq-root">Folder on the server</label>
+                            <input class="form-control rc-mono" id="rc-acq-root" name="storageRootPath"
+                                   value="@(acquisition?.StorageRootPath)" placeholder="/srv/recon/inbox" />
+                            <div class="form-text">
+                                Absolute, and readable by the portal's process. Required for Folder.
+                            </div>
+                        </div>
+
+                        <div class="col-6 col-sm-4">
+                            <label class="form-label" for="rc-acq-retries">Retries</label>
+                            <input class="form-control" id="rc-acq-retries" name="retryCount"
+                                   type="number" min="0" max="20"
+                                   value="@(acquisition?.RetryCount ?? 3)" />
+                        </div>
+
+                        <div class="col-6 col-sm-4">
+                            <label class="form-label" for="rc-acq-delay">Delay (seconds)</label>
+                            <input class="form-control" id="rc-acq-delay" name="retryDelaySeconds"
+                                   type="number" min="0" max="3600"
+                                   value="@(acquisition?.RetryDelaySeconds ?? 60)" />
+                        </div>
+
+                        <div class="col-12 d-flex gap-2">
+                            <button class="btn btn-primary" type="submit">Save acquisition</button>
+                        </div>
+                    </form>
+
+                    @if (acquisition is not null)
+                    {
+                        <form method="post" asp-action="DeleteAcquisition" class="mt-2"
+                              onsubmit="return confirm('Remove acquisition? This dataset\'s files will have to be uploaded.');">
+                            <input type="hidden" name="datasetId" value="@selected.DatasetId" />
+                            <input type="hidden" name="acquisitionId" value="@acquisition.AcquisitionId" />
+                            <button class="btn btn-sm btn-outline-danger" type="submit">
+                                Remove acquisition
+                            </button>
+                        </form>
+                    }
+                }
+                else
+                {
+                    <div class="rc-empty">You can see this dataset but not configure it.</div>
+                }
+            </div>
+
+            <div class="col-12 col-xl-6">
+                @if (canOperate && acquisition?.Method == "Folder")
+                {
+                    <form method="post" asp-action="CheckAcquisition" class="row g-2">
+                        <input type="hidden" name="datasetId" value="@selected.DatasetId" />
+
+                        <div class="col-12 col-sm-5">
+                            <label class="form-label" for="rc-acq-date">Business date</label>
+                            <input class="form-control" id="rc-acq-date" name="businessDate" type="date"
+                                   value="@today.ToString("yyyy-MM-dd")" required />
+                        </div>
+
+                        <div class="col-12 col-sm-4">
+                            <label class="form-label" for="rc-acq-session">Session</label>
+                            <input class="form-control" id="rc-acq-session" name="sessionRef"
+                                   placeholder="optional" />
+                        </div>
+
+                        <div class="col-12 col-sm-3 d-flex align-items-end">
+                            <button class="btn btn-outline-primary w-100" type="submit">Check now</button>
+                        </div>
+
+                        <div class="col-12 form-text">
+                            Looks in the folder and reports what it finds. Records nothing and stages
+                            nothing — checking is not consuming.
+                        </div>
+                    </form>
+                }
+                else if (acquisition?.Method == "Folder")
+                {
+                    <div class="rc-empty">Checking the folder needs Operate access.</div>
+                }
+                else
+                {
+                    <div class="rc-empty">
+                        Nothing to check: this dataset's files are uploaded from the Runs screen.
+                    </div>
+                }
+            </div>
+        </div>
+
+        <h3 class="h6 mt-4">Files received</h3>
+        <div class="rc-table-scroll">
+            <table class="table rc-table table-hover align-middle mb-0">
+                <thead>
+                    <tr>
+                        <th>File</th><th>Business date</th><th>Status</th>
+                        <th class="text-end">Rows</th><th class="text-end">Rejected</th>
+                        <th>Received</th><th>SHA-256</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (arrivals.Count == 0)
+                    {
+                        <tr>
+                            <td colspan="7" class="rc-empty">
+                                No file has been recorded for this dataset yet.
+                            </td>
+                        </tr>
+                    }
+                    @foreach (var arrival in arrivals)
+                    {
+                        <tr>
+                            <td>
+                                <span class="rc-mono">@arrival.FileName</span>
+                                <div class="rc-help rc-mono">@arrival.StoragePath</div>
+                            </td>
+                            <td>@arrival.BusinessDate.ToString("yyyy-MM-dd")</td>
+                            <td>
+                                <span class="badge @(arrival.Status switch
+                                {
+                                    "Parsed" => "text-bg-success",
+                                    "Failed" => "text-bg-danger",
+                                    "Duplicate" => "text-bg-warning",
+                                    _ => "text-bg-secondary",
+                                })">@arrival.Status</span>
+                            </td>
+                            <td class="text-end rc-mono">@(arrival.Rows?.ToString("N0") ?? "—")</td>
+                            <td class="text-end rc-mono">@(arrival.Errors?.ToString("N0") ?? "—")</td>
+                            <td class="rc-help">
+                                @(arrival.ReceivedAt?.ToString("yyyy-MM-dd HH:mm") ?? "—")
+                            </td>
+                            <td class="rc-mono rc-help">@arrival.Sha256[..12]</td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        <div class="form-text mt-2">
+            The bytes stay on disk and the database keeps the path, the hash and the counts — at two
+            million rows a day, files as blobs is how a database becomes unmanageable. The hash is
+            what makes the same content arriving twice a duplicate rather than a second run.
+        </div>
+    </div>
 }
 
 @section Scripts {

@@ -71,7 +71,7 @@ boundary.
 | `/exceptions` | The workspace: filter, assign, close with a required reason, reopen. Aging is computed on the indexed business date |
 | `/reports` | The report builder, and the exports themselves — streamed, never buffered |
 | `/counterparties` | Counterparties, their definitions, and who may see them |
-| `/datasets` | The field registry and the mapping editor, with the activation gate |
+| `/datasets` | The field registry, the format and mapping editors, the acquisition folder, and what has actually arrived |
 | `/rules` | The visual rule builder and the sandbox dry-run |
 | `/fees` | Fee schedules, tiers, applicability, and interchange netting |
 | `/schedules` | Cron schedules and alert policies, with the next fire times in both zones |
@@ -115,6 +115,7 @@ There is no step in operating this platform that needs a shell.
 | `recon run --left-file … --right-file …` | **Upload a session and reconcile it** on `/runs`: two files in, a reconciled run out |
 | `INSERT cfg.Dataset` / `FileFormatDefinition` / `FieldMapping` | The dataset, format and mapping editors on `/datasets` — a counterparty can be onboarded without SQL |
 | `INSERT cfg.ExclusionRule` / `ClassificationRule` / `ControlTotalDefinition` | The three rule-set editors on `/rules`, each validated through the field registry |
+| `INSERT cfg.AcquisitionDefinition`, and hoping something read it | The acquisition card on `/datasets`, with *Check now* — which says whether tonight's run will find the file, before tonight |
 | `Recon:Scheduler:Enabled` + a restart | *Stop the scheduler* on `/schedules`, effective within a minute |
 | Waiting for the nightly tick | *Run housekeeping and alert checks now* — the same methods the tick calls |
 
@@ -129,12 +130,47 @@ scheduler also call. That class exists because the pipeline had quietly grown
 a second copy: the CLI carried the whole sequence, and the portal needed
 exactly that sequence. Two copies of a pipeline is two pipelines.
 
+Whichever way a file arrives — uploaded or acquired — it is recorded once, in
+`ops.SourceFile`, through `SourceFileRepository`, with its SHA-256, its row
+count and its reject count. Every staged row and every parse error carries that
+file's id, so "which file produced this row" is answerable from the data rather
+than from the order things happened to load in. The unique index on
+(dataset, hash, business date) is what makes the same content arriving twice a
+*duplicate* rather than a second run; the run is still allowed, because a retry
+after a configuration fix is legitimate, but the screen says so.
+
+## Where the files come from
+
+A run with no uploads asks each dataset's acquisition for the day's file.
+`Recon.Engine.Providers.FolderAcquisition` is the provider: it takes the folder
+from `cfg.AcquisitionDefinition`, substitutes the business date into the file
+format's file-name pattern — `{yyyyMMdd}`, `{yyyy-MM-dd}`, `{ddMMyyyy}`,
+`{yyyy}`, `{MM}`, `{dd}`, `{session}` — matches that as a regex against the
+folder, and refuses to choose when two files match. Which of them is the day's
+truth is not something to guess at.
+
+Only **Folder** and **Manual** can be saved. `Sftp` and `Api` are in the
+schema's list of methods and have no provider, so the screen does not offer
+them and the controller refuses them if posted anyway: configuration that
+fetches nothing looks like coverage, which is worse than a blank. A new method
+is a new class beside `FolderAcquisition` and nothing else changes.
+
+A day whose file never arrived is recorded as a `Rejected` run carrying that
+reason, and raises the file-not-received alert — never as a run that
+reconciled nothing. The two look identical on a dashboard and are not the same
+event.
+
 ## The scheduler runs in-process
 
 `Services/SchedulerService` is a `BackgroundService`: it wakes once a minute,
 fires the schedules due **in each schedule's own time zone**, raises the alert
 conditions, and runs the daily housekeeping (sandbox purge, partition
-lookahead, file-not-received). In-process rather than a second deployable
+lookahead, file-not-received). A fired schedule goes through the same
+`SessionRunner` the portal's buttons use — acquisition, staging, passes and
+all. It used to carry its own copy of that sequence, which is why a scheduled
+run reconciled whatever happened to be staged already: the copy had no
+acquisition step, and the demo always staged its files first, so nothing said
+so. In-process rather than a second deployable
 because the phase's exit criterion is "runs unattended for a full week" and a
 second thing to keep alive is a second thing that can be down. More than one
 node is safe anyway: `sp_getapplock` keyed on `(DefinitionId, BusinessDate)`
@@ -147,7 +183,7 @@ cd tests/browser && npm install          # playwright only
 node drive-portal.js                     # needs the portal running
 ```
 
-115 assertions in a real browser against the real database: every screen
+133 assertions in a real browser against the real database: every screen
 renders with its shell intact and no console error, the rule builder offers no
 field the registry withholds, a withheld field in a filter is rejected and a
 valid one accepted, a non-sargable comparison warns and warns harder in pass 1,
@@ -180,6 +216,15 @@ definition, a matching pass, an exclusion, a classification per side and a
 control total, activates all of it, uploads two files it writes itself, and
 asserts the run matched what those files were built to match — with no SQL
 anywhere.
+
+Then it reconciles a **second** business date the way a scheduled night does
+it: it configures folder acquisition, gives the format a file-name pattern,
+drops the day's file into the watched directory with the *wrong* day's file
+beside it, and triggers a run with nothing uploaded at all — asserting that the
+right file was picked, that checking the folder records nothing, that an empty
+folder reports the file as not received, that the same content twice is a
+duplicate, and that two files matching one pattern are refused rather than
+guessed between.
 
 ```bash
 node tests/browser/drive-onboard.js

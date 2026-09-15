@@ -134,6 +134,9 @@ jQuery(function ($) {
     $formatType.on("change", syncFormatType);
     syncFormatType();
 
+    /* Fired on load as well as on change: the screen opens with a format
+       already selected, and a form showing defaults beside a dropdown
+       reading "v1" is a form that invites saving the wrong thing. */
     $("select[data-rc-formats]").on("change", function () {
         var $o = $(this).find("option:selected");
 
@@ -154,7 +157,7 @@ jQuery(function ($) {
         $("#hasHeader").prop("checked", $o.data("header") === true || $o.data("header") === "true");
 
         syncFormatType();
-    });
+    }).trigger("change");
 
     /* ---- field mappings --------------------------------------------
        The hint depends on both the format type and the field's declared

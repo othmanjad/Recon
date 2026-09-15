@@ -412,11 +412,16 @@ public sealed class DatabaseInstaller(
 
             return InstallResult.Succeeded(log);
         }
-        catch (SqlException ex)
+        catch (Exception ex) when (ex is SqlException or SqlInstallException)
         {
             // The server's message names the statement that failed, which is
             // what an operator needs. A half-applied script leaves its ledger
             // row unwritten, so the next attempt retries it.
+            //
+            // SqlInstallException is the one this thread throws itself, to add
+            // which batch failed — and it was not caught anywhere, so the one
+            // path that reports a script failure answered 500 with a stack
+            // trace instead of the server's message.
             _log.LogError(ex, "Install failed.");
             return InstallResult.Failed(ex.Message, log);
         }
@@ -467,7 +472,7 @@ public sealed class DatabaseInstaller(
 
             return InstallResult.Succeeded(log);
         }
-        catch (SqlException ex)
+        catch (Exception ex) when (ex is SqlException or SqlInstallException)
         {
             return InstallResult.Failed(ex.Message, log);
         }

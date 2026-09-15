@@ -248,3 +248,13 @@ person who ran it, and two uploaded files produce the same fifteen matched
 pairs the CLI reports for them. It found the defect that mattered most here:
 `/setup` itself could not be built without a database connection, so every
 request to the one screen that has to work without one answered 500.
+
+It now presses *Load the demo configuration* twice, because the script claims
+to be re-runnable and pressing the button twice is the only thing that proves
+it. The first time anything did, the answer was a 500: the script deleted the
+reconciliation definition ahead of the eight tables that reference it, and
+`SqlInstallException` — the type the installer throws itself to say which batch
+failed — was caught nowhere, so the one path that reports a script failure
+threw instead of reporting. Each run also names its own database, so "created
+database" is asserted against a genuine first run rather than passing once and
+lying afterwards.

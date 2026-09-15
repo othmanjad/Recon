@@ -14,7 +14,13 @@ SET ANSI_NULLS ON;
 SET QUOTED_IDENTIFIER ON;
 GO
 
-/* Re-runnable: drop whatever a previous demo left behind. */
+/* Re-runnable: drop whatever a previous demo left behind.
+
+   The order is the foreign keys' order, child before parent, and every
+   subselect finds its parent by code — so a parent deleted early both
+   fails on its own constraint and orphans everything below it. Pressing
+   "Load the demo configuration" a second time is what proves this block,
+   and it is the only thing that does. */
 DELETE ops.RunAggregate WHERE DefinitionId IN
     (SELECT DefinitionId FROM cfg.ReconciliationDefinition WHERE Code = 'CLIQ_OM');
 DELETE ops.ControlTotalResult WHERE ControlTotalId IN
@@ -26,6 +32,12 @@ DELETE ops.MatchResult WHERE RunId IN
     (SELECT RunId FROM ops.ReconRun WHERE DefinitionId IN
         (SELECT DefinitionId FROM cfg.ReconciliationDefinition WHERE Code = 'CLIQ_OM'));
 DELETE ops.ReconRunStep WHERE RunId IN
+    (SELECT RunId FROM ops.ReconRun WHERE DefinitionId IN
+        (SELECT DefinitionId FROM cfg.ReconciliationDefinition WHERE Code = 'CLIQ_OM'));
+DELETE ops.InterchangeSummary WHERE RunId IN
+    (SELECT RunId FROM ops.ReconRun WHERE DefinitionId IN
+        (SELECT DefinitionId FROM cfg.ReconciliationDefinition WHERE Code = 'CLIQ_OM'));
+DELETE stg.ParseError WHERE RunId IN
     (SELECT RunId FROM ops.ReconRun WHERE DefinitionId IN
         (SELECT DefinitionId FROM cfg.ReconciliationDefinition WHERE Code = 'CLIQ_OM'));
 DELETE ops.ReconRun WHERE DefinitionId IN
@@ -41,7 +53,6 @@ DELETE cfg.ControlTotalDefinition WHERE DefinitionId IN
     (SELECT DefinitionId FROM cfg.ReconciliationDefinition WHERE Code = 'CLIQ_OM');
 DELETE cfg.ClassificationRule WHERE DefinitionId IN
     (SELECT DefinitionId FROM cfg.ReconciliationDefinition WHERE Code = 'CLIQ_OM');
-DELETE cfg.ReconciliationDefinition WHERE Code = 'CLIQ_OM';
 DELETE cfg.ReportColumn WHERE ReportDefinitionId IN
     (SELECT ReportDefinitionId FROM cfg.ReportDefinition WHERE DefinitionId IN
         (SELECT DefinitionId FROM cfg.ReconciliationDefinition WHERE Code = 'CLIQ_OM'));
@@ -51,11 +62,14 @@ DELETE cfg.ScheduleDefinition WHERE DefinitionId IN
     (SELECT DefinitionId FROM cfg.ReconciliationDefinition WHERE Code = 'CLIQ_OM');
 DELETE cfg.AlertPolicy WHERE DefinitionId IN
     (SELECT DefinitionId FROM cfg.ReconciliationDefinition WHERE Code = 'CLIQ_OM');
+/* LAST of the definition's rows, not first: eight tables reference
+   DefinitionId, and deleting the definition ahead of them both failed on
+   the foreign key and left the rows below unreachable, because every
+   subselect here finds the definition by its code. A second "Load the
+   demo configuration" answered 500. */
+DELETE cfg.ReconciliationDefinition WHERE Code = 'CLIQ_OM';
 DELETE cfg.FeeApplicability WHERE DatasetId IN
     (SELECT DatasetId FROM cfg.Dataset WHERE Code IN ('CLIQ_SESSION','OM_TXN'));
-DELETE ops.InterchangeSummary WHERE RunId IN
-    (SELECT RunId FROM ops.ReconRun WHERE DefinitionId IN
-        (SELECT DefinitionId FROM cfg.ReconciliationDefinition WHERE Code = 'CLIQ_OM'));
 DELETE cfg.FeeTier WHERE FeeScheduleId IN
     (SELECT FeeScheduleId FROM cfg.FeeSchedule WHERE CounterpartyId IN
         (SELECT CounterpartyId FROM cfg.Counterparty WHERE Code = 'JOPACC'));
@@ -71,6 +85,12 @@ DELETE cfg.FieldMapping WHERE FileFormatId IN
 DELETE cfg.FileFormatDefinition WHERE DatasetId IN
     (SELECT DatasetId FROM cfg.Dataset WHERE Code IN ('CLIQ_SESSION','OM_TXN'));
 DELETE cfg.DatasetField WHERE DatasetId IN
+    (SELECT DatasetId FROM cfg.Dataset WHERE Code IN ('CLIQ_SESSION','OM_TXN'));
+DELETE ops.SourceFile WHERE DatasetId IN
+    (SELECT DatasetId FROM cfg.Dataset WHERE Code IN ('CLIQ_SESSION','OM_TXN'));
+DELETE cfg.AcquisitionDefinition WHERE DatasetId IN
+    (SELECT DatasetId FROM cfg.Dataset WHERE Code IN ('CLIQ_SESSION','OM_TXN'));
+DELETE cfg.SqlSourceDefinition WHERE DatasetId IN
     (SELECT DatasetId FROM cfg.Dataset WHERE Code IN ('CLIQ_SESSION','OM_TXN'));
 DELETE cfg.Dataset WHERE Code IN ('CLIQ_SESSION','OM_TXN');
 DELETE cfg.Counterparty WHERE Code = 'JOPACC';

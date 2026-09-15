@@ -10,8 +10,11 @@
    reconciled run. Every step of it is a screen, and this asserts that
    each one does what it says.
 
-   It creates its own database (ReconFirstRun by default) and leaves it
-   in place afterwards, so a failure can be looked at.
+   It creates its own database — ReconFirstRun_<n>, a new name per run, so
+   that every run is a genuine FIRST run and "created database" means what
+   it says — and leaves it in place afterwards, so a failure can be looked
+   at. The throwaway SQL container is how they are cleaned up:
+   docker rm -f reconsql.
    ===================================================================== */
 
 const { chromium } = require("playwright");
@@ -20,7 +23,8 @@ const path = require("path");
 
 const BASE = process.env.PORTAL_URL || "http://127.0.0.1:5080";
 const SERVER = process.env.RECON_SQL_SERVER || "127.0.0.1,1433";
-const DATABASE = process.env.RECON_SQL_DATABASE || "ReconFirstRun";
+const DATABASE = process.env.RECON_SQL_DATABASE
+    || "ReconFirstRun_" + Date.now().toString().slice(-6);
 const LOGIN = process.env.RECON_SQL_LOGIN || "sa";
 const PASSWORD = process.env.RECON_SQL_PASSWORD || "Recon#Verify2026x";
 const OUT = process.env.SHOTS_DIR || path.join(__dirname, ".shots");
@@ -183,6 +187,20 @@ async function submit(page, locator, timeout = 120000) {
     check(/Demo configuration loaded/.test(body), `loading the demo failed: ${firstLine(body)}`);
     check(/granted first\.operator Configure access to 1 counterparty/.test(body),
         "the person who seeded the platform was not granted access to it");
+
+    /* And again. The demo script says it is re-runnable — it deletes its own
+       rows before inserting them — and pressing the button twice is the only
+       thing that proves it. The first time it was pressed twice, it answered
+       500: the script deleted the definition ahead of the eight tables that
+       reference it, and the installer's own exception type was caught
+       nowhere. */
+    await submit(page, page.locator('form[action*="/Setup/Demo"] button'), 180000);
+
+    body = await page.locator("body").innerText();
+    check(/Demo configuration loaded/.test(body),
+        `loading the demo a second time failed: ${firstLine(body)}`);
+    check(!/unhandled exception/i.test(body),
+        "a second demo load answered with an unhandled exception");
 
     await page.screenshot({ path: path.join(OUT, "setup-4-seeded.png"), fullPage: true });
 

@@ -155,6 +155,16 @@ screen that has to answer on an unconfigured portal took a service whose
 constructor needs a connection, so every request to it was a 500 — a portal
 that could not be set up from the screen that sets it up.
 
+Driving it a *second* time, against a server that already had the database,
+found two more. **The demo configuration was not re-runnable** although it says
+it is: it deleted the reconciliation definition ahead of the eight tables that
+reference it, so the delete failed on the foreign key and the rows below were
+orphaned — every subselect there finds the definition by its code. And **the
+installer's own exception type was caught nowhere**, so the single code path
+that exists to report "this script failed, here is the server's message"
+answered 500 with a stack trace instead. Both were invisible on a first run,
+which is the only kind of run either had ever had.
+
 Driving the **onboarding** path — create a counterparty, two datasets, their
 registries, formats, mappings, a definition, a pass, rules, then upload two
 files and reconcile them — found the two that made the Phase 3 exit criterion

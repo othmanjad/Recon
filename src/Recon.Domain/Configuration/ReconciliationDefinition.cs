@@ -40,17 +40,61 @@ public sealed record ReconciliationDefinition
 
     /// <summary>
     /// The universal roles a definition cannot run without (§6.1). Control
-    /// totals, partitioning and fee logic all rely on them, and review item B6
-    /// noted the rule was stated but had no enforcement point. This is it.
+    /// totals and fee logic rely on them, and review item B6 noted the rule
+    /// was stated but had no enforcement point. This is it.
     /// </summary>
     public static readonly FieldRole[] RequiredRoles =
     [
         FieldRole.Reference,
         FieldRole.Amount,
         FieldRole.Currency,
-        FieldRole.Date,
         FieldRole.Direction,
     ];
+
+    /// <summary>
+    /// Roles that are not required, but whose absence changes what the
+    /// platform can do for that dataset. The screen says so rather than
+    /// blocking.
+    ///
+    /// <para>
+    /// <see cref="FieldRole.Date"/> was required until it was asked to be
+    /// optional, and it can be: <c>RowParser</c> already stamps every row with
+    /// the business date when a dataset has no Date-role field, which is the
+    /// right answer for a summary feed — one row describing a whole session
+    /// has no transaction date of its own. What is lost is real and worth
+    /// saying out loud: <c>TxDate</c> is the partition column and the matching
+    /// window is a range over it, so a dataset without the role collapses to
+    /// the business date and a transaction that arrives late cannot be matched
+    /// against the day it actually belongs to.
+    /// </para>
+    /// </summary>
+    public static readonly FieldRole[] AdvisoryRoles = [FieldRole.Date];
+
+    /// <summary>
+    /// What is missing that does not block activation. Separate from
+    /// <see cref="ActivationProblems"/> on purpose: a warning rendered as an
+    /// error teaches operators to ignore errors.
+    /// </summary>
+    public IReadOnlyList<string> ActivationAdvisories()
+    {
+        var advisories = new List<string>();
+
+        foreach (var side in new[] { Side.Left, Side.Right })
+        {
+            var ds = DatasetFor(side);
+
+            if (ds.FieldWithRole(FieldRole.Date) is null)
+            {
+                advisories.Add(
+                    $"{side} dataset {ds.Code} has no Date-role field, so every row is stamped " +
+                    $"with the business date. Correct for a summary feed; for a transaction feed " +
+                    $"it means no DateWithin comparison against this side, and a late arrival " +
+                    $"cannot be matched against the day it belongs to.");
+            }
+        }
+
+        return advisories;
+    }
 
     public IReadOnlyList<string> ActivationProblems()
     {

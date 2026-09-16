@@ -6,6 +6,7 @@
     var selectedRow = ViewData["SelectedRow"] as DatasetRow;
     var slots = (List<SlotOption>)ViewData["Slots"]!;
     var problems = (IReadOnlyList<string>)ViewData["Problems"]!;
+    var advisories = (IReadOnlyList<string>)ViewData["Advisories"]!;
     var counterparties = (List<CounterpartyRow>)ViewData["Counterparties"]!;
     var currencies = (List<Currency>)ViewData["Currencies"]!;
     var formats = (List<FormatRow>)ViewData["Formats"]!;
@@ -151,6 +152,18 @@ else
                         </ul>
                     }
 
+                    @* Advisories are NOT problems and are not drawn as such: a
+                       warning rendered in red teaches operators to ignore red. *@
+                    @if (advisories.Count > 0)
+                    {
+                        <ul class="mb-0 mt-2 small text-warning-emphasis">
+                            @foreach (var advisory in advisories)
+                            {
+                                <li class="mb-1">@advisory</li>
+                            }
+                        </ul>
+                    }
+
                     <hr>
                     <div class="rc-tile-label mb-2">Universal roles</div>
                     <div class="d-flex flex-wrap gap-1">
@@ -162,12 +175,24 @@ else
                                 @role
                             </span>
                         }
+                        @* Optional, and shown as optional. Amber rather than red
+                           because a summary feed is right not to have one. *@
+                        @foreach (var role in ReconciliationDefinition.AdvisoryRoles)
+                        {
+                            var field = selected.FieldWithRole(role);
+                            <span class="badge @(field is null ? "text-bg-warning" : "text-bg-success")"
+                                  title="@(field is null ? "not mapped — optional" : field.FieldCode)">
+                                @role @(field is null ? "(optional)" : "")
+                            </span>
+                        }
                     </div>
                     <div class="rc-help mt-2">
                         The engine never looks for a field <em>named</em> "Amount"; it looks for the
                         field whose role <em>is</em> Amount. That is what makes control totals, fee
                         calculation and date partitioning work across partners that name nothing
-                        alike.
+                        alike. <strong>Date is optional:</strong> without it every row is stamped
+                        with the business date, which is right for a summary feed and gives up
+                        late-arrival matching for a transaction feed.
                     </div>
                 </div>
             </div>

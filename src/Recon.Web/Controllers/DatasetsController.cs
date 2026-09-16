@@ -48,6 +48,7 @@ public sealed class DatasetsController(
             : datasets.First(d => d.DatasetId == selected.DatasetId);
 
         ViewData["Problems"] = selected is null ? [] : ActivationProblems(selected);
+        ViewData["Advisories"] = selected is null ? [] : ActivationAdvisories(selected);
 
         ViewData["Counterparties"] = (await queries.CounterpartiesAsync(User).ConfigureAwait(false))
             .Where(c => c.AccessLevel >= AccessLevel.Configure)
@@ -791,10 +792,38 @@ public sealed class DatasetsController(
     ///
     /// <para>
     /// A dataset cannot be activated without the universal roles: control
-    /// totals, partitioning and fee logic all rely on them, so a definition
-    /// missing one would run and produce numbers nobody can check.
+    /// totals and fee logic rely on them, so a definition missing one would
+    /// run and produce numbers nobody can check. The Date role is an
+    /// <see cref="ActivationAdvisories"/> rather than one of them — see
+    /// <see cref="ReconciliationDefinition.AdvisoryRoles"/> for what a dataset
+    /// without it gives up.
     /// </para>
     /// </summary>
+    /// <summary>
+    /// What is missing that does <b>not</b> block activation, per dataset. A
+    /// warning drawn as an error teaches operators to ignore errors, so these
+    /// are rendered apart from <see cref="ActivationProblems"/>.
+    /// </summary>
+    internal static List<string> ActivationAdvisories(Dataset dataset)
+    {
+        ArgumentNullException.ThrowIfNull(dataset);
+
+        var advisories = new List<string>();
+
+        if (dataset.FieldWithRole(FieldRole.Date) is null)
+        {
+            advisories.Add(
+                "no Date-role field: every row will be stamped with the business date. That is " +
+                "correct for a summary feed — one row describing a whole session has no " +
+                "transaction date of its own — but a transaction feed gives up two things: a " +
+                "DateWithin comparison against this side, and matching a late arrival against " +
+                "the day it actually belongs to. TxDate is the partition column and the matching " +
+                "window is a range over it.");
+        }
+
+        return advisories;
+    }
+
     internal static List<string> ActivationProblems(Dataset dataset)
     {
         ArgumentNullException.ThrowIfNull(dataset);
@@ -808,8 +837,8 @@ public sealed class DatasetsController(
         if (missing.Count > 0)
         {
             problems.Add(
-                $"missing universal role(s): {string.Join(", ", missing)} — control totals, " +
-                "partitioning and fee logic all rely on them");
+                $"missing universal role(s): {string.Join(", ", missing)} — control totals and " +
+                "fee logic rely on them");
         }
 
         var indexed = dataset.Fields.Count(f => f.IsIndexed);

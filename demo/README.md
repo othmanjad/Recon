@@ -139,9 +139,13 @@ needs no SQL:
 2. **Datasets & fields → New dataset**, twice — one per side. Each is created
    inactive and empty.
 3. Add each dataset's **field registry**: a code, a label, a type, a role and
-   a storage slot. The five universal roles (Reference, Amount, Currency,
-   Date, Direction) are what activation checks, because control totals,
-   partitioning and fee logic all read them.
+   a storage slot. Four universal roles (Reference, Amount, Currency,
+   Direction) are what activation checks, because control totals and fee
+   logic read them. **Date is optional:** a dataset without it has every row
+   stamped with the business date — right for a summary feed, and for a
+   transaction feed it gives up `DateWithin` comparisons against that side and
+   matching a late arrival against the day it belongs to. The screen says so
+   as an advisory rather than blocking.
 4. Add a **file format** and its **field mappings** — where in the file each
    registry field comes from. Formats are effective-dated, so a layout change
    later is a new version rather than an edit.

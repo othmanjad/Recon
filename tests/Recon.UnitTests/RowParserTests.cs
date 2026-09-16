@@ -118,6 +118,47 @@ public class RowParserTests
     }
 
     [Fact]
+    public void ADatasetWithNoDateRoleIsStampedWithTheBusinessDate()
+    {
+        /* The Date role is optional (it was required until it was asked to be
+           optional), and this is the behaviour that makes it safe to be: TxDate
+           is the partition column, so it must come from somewhere
+           deterministic, and for a dataset with no Date-role field that
+           somewhere is the business date. A summary feed — one row describing a
+           whole session — has no transaction date of its own.
+
+           The row still carries its date VALUE if it has one; what changes is
+           only where the partition date comes from. */
+        var full = Fixtures.CliqSession();
+        var dateless = full with
+        {
+            Fields = full.Fields.Where(f => f.Role != FieldRole.Date).ToList(),
+        };
+
+        // The mapping goes with the field: a dataset with no Date-role field
+        // has nothing to map the file's date column to, and the column is
+        // simply not read.
+        var format = CliqFormat(full);
+        var parser = new RowParser(
+            dateless,
+            format with
+            {
+                Mappings = format.Mappings.Where(m => m.Field.Role != FieldRole.Date).ToList(),
+            },
+            Fixtures.Jod);
+
+        var record = new StagingRecord { LoadRunId = 4471 };
+
+        var ok = parser.TryParse(
+            Row("E2E-1", "TXN-1", "0079012345", "125.500", "JOD", "20260101121500", "Inward", "ACSC"),
+            record, BusinessDate, out var error);
+
+        Assert.True(ok);
+        Assert.Null(error);
+        Assert.Equal(BusinessDate, record.TxDate);
+    }
+
+    [Fact]
     public void ParsesADateUsingTheConfiguredFormat()
     {
         var (ok, record, _) = Parse(

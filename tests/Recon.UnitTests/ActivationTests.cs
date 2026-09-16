@@ -36,6 +36,55 @@ public class ActivationTests
     }
 
     [Fact]
+    public void ADatasetWithNoDateRoleStillActivates()
+    {
+        // The Date role was required and was asked to be optional, and it can
+        // be: RowParser already stamps every row with the business date when a
+        // dataset has no Date-role field, which is the right answer for a
+        // summary feed — one row describing a whole session has no transaction
+        // date of its own.
+        var definition = Fixtures.CliqOm();
+        var dateless = definition with
+        {
+            Left = definition.Left with
+            {
+                Fields = definition.Left.Fields.Where(f => f.Role != FieldRole.Date).ToList(),
+            },
+            Right = definition.Right with
+            {
+                Fields = definition.Right.Fields.Where(f => f.Role != FieldRole.Date).ToList(),
+            },
+        };
+
+        Assert.Empty(dateless.ActivationProblems());
+    }
+
+    [Fact]
+    public void AMissingDateRoleIsSaidOutLoudRatherThanBlocked()
+    {
+        // What is given up is real, so it is reported — as an advisory, not as
+        // a problem. A warning rendered as an error teaches operators to
+        // ignore errors.
+        var definition = Fixtures.CliqOm();
+
+        Assert.Empty(definition.ActivationAdvisories());
+
+        var dateless = definition with
+        {
+            Right = definition.Right with
+            {
+                Fields = definition.Right.Fields.Where(f => f.Role != FieldRole.Date).ToList(),
+            },
+        };
+
+        var advisories = dateless.ActivationAdvisories();
+
+        Assert.Single(advisories);
+        Assert.Contains(advisories, a => a.Contains("business date", StringComparison.Ordinal));
+        Assert.Empty(dateless.ActivationProblems());
+    }
+
+    [Fact]
     public void ADefinitionWithNoActivePassIsBlocked()
     {
         var definition = Fixtures.CliqOm();

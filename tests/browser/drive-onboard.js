@@ -74,8 +74,10 @@ async function submit(page, locator, timeout = 60000) {
     ]);
 }
 
-/* The five universal roles, the ones a dataset cannot be activated
-   without: control totals, partitioning and fee logic all read them. */
+/* Four universal roles a dataset cannot be activated without — control
+   totals and fee logic read them — plus Date, which is OPTIONAL: a dataset
+   without it has every row stamped with the business date, which is right for
+   a summary feed. These datasets are transaction feeds, so they map it. */
 const LEFT_FIELDS = [
     { code: "REF", label: "Ledger Reference", type: "String", role: "Reference", slot: "Text1", order: 1, indexed: true, required: true },
     { code: "AMT", label: "Amount", type: "Integer", role: "Amount", slot: "Num1", order: 2, required: true },
@@ -85,11 +87,16 @@ const LEFT_FIELDS = [
     { code: "STATUS", label: "Status", type: "String", role: "Status", slot: "Text4", order: 6 },
 ];
 
+/* The right-hand side deliberately has NO Date-role field, because that role
+   is optional: every row is stamped with the business date instead. A summary
+   feed is the case it exists for — one row describing a whole session has no
+   transaction date of its own — and this driver is where that is proved to
+   activate and reconcile rather than only to compile. The left side keeps its
+   date, so both paths run in the same reconciliation. */
 const RIGHT_FIELDS = [
     { code: "STMT_REF", label: "Statement Reference", type: "String", role: "Reference", slot: "Text1", order: 1, indexed: true, required: true },
     { code: "STMT_AMT", label: "Amount", type: "Integer", role: "Amount", slot: "Num1", order: 2, required: true },
     { code: "STMT_CCY", label: "Currency", type: "String", role: "Currency", slot: "Text2", order: 3, required: true },
-    { code: "STMT_WHEN", label: "Value Date", type: "DateTime", role: "Date", slot: "Date1", order: 4, required: true },
     { code: "STMT_DIR", label: "Direction", type: "String", role: "Direction", slot: "Text3", order: 5, required: true },
 ];
 
@@ -177,7 +184,8 @@ function csvFor(date) {
     for (const field of LEFT_FIELDS) { await addField(leftId, field); }
     for (const field of RIGHT_FIELDS) { await addField(rightId, field); }
 
-    // The activation gate should now be satisfied: all five roles mapped.
+    // The activation gate should now be satisfied: the four required roles
+    // mapped, and Date mapped too because these are transaction feeds.
     await page.goto(`${BASE}/datasets?id=${leftId}`, { waitUntil: "load" });
     body = await page.locator("body").innerText();
 
@@ -188,6 +196,21 @@ function csvFor(date) {
         "not every field was saved into the left registry");
 
     await shot(page, "onboard-1-registry");
+
+    /* The right side has no Date-role field, and that must be an ADVISORY, not
+       a block: the gate refusing it would be the platform deciding a business
+       question it does not own. */
+    await page.goto(`${BASE}/datasets?id=${rightId}`, { waitUntil: "load" });
+    body = await page.locator("body").innerText();
+
+    check(/can be activated/.test(body),
+        `a dataset with no Date-role field was refused activation: ${activationText(body)}`);
+    check(/no Date-role field/.test(body),
+        "the screen did not say what a dataset without a Date-role field gives up");
+    check(/business date/.test(body),
+        "the advisory did not say that rows are stamped with the business date");
+    check(/Date \(optional\)/.test(body),
+        "the role badges do not mark Date as optional");
 
     // =================================================================
     // 3. A CSV format and its mappings, per side.
@@ -208,11 +231,11 @@ function csvFor(date) {
         ["STATUS", "status", ""],
     ];
 
+    // No STMT_WHEN: the column stays in the file and is simply not read.
     const rightMappings = [
         ["STMT_REF", "ref", ""],
         ["STMT_AMT", "amount", ""],
         ["STMT_CCY", "ccy", ""],
-        ["STMT_WHEN", "value_date", "yyyy-MM-dd HH:mm:ss"],
         ["STMT_DIR", "dir", ""],
     ];
 

@@ -100,7 +100,7 @@ directly.
 
 ```bash
 ./build.sh                 # restore + build, warnings as errors
-./build.sh test            # 165 unit tests
+./build.sh test            # 168 unit tests
 ./build.sh test-all        # + integration tests (needs RECON_TEST_CONNECTION)
 ./build.sh perf            # the Phase 1 2M-row spike
 ```

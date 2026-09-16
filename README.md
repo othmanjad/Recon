@@ -199,7 +199,7 @@ loaded". A scheduled run now goes through the same `SessionRunner` the portal's
 buttons use, and a day whose file never arrived is recorded as `Rejected` with
 that reason instead of as a run that matched nothing.
 
-**The engine is executed too**, including against volume. 165 unit tests, 10
+**The engine is executed too**, including against volume. 168 unit tests, 10
 integration tests against a live server, and the Phase 1 spike at 2,000,000
 rows per side — which meets every budget in the design and is the measurement
 that keeps the escalation path deferred. See `src/README.md` for the numbers.

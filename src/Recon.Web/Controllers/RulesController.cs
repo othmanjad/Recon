@@ -26,7 +26,8 @@ public sealed class RulesController(
     Microsoft.Data.SqlClient.SqlConnection connection,
     AccessService access,
     AuditService audit,
-    SandboxService sandbox) : Controller
+    SandboxService sandbox,
+    DatasetReadiness readiness) : Controller
 {
     public async Task<IActionResult> Index(int? id)
     {
@@ -46,7 +47,11 @@ public sealed class RulesController(
 
         ViewData["Definitions"] = definitions;
         ViewData["Selected"] = definition;
-        ViewData["Problems"] = definition?.ActivationProblems() ?? [];
+        ViewData["Problems"] = definition is null
+            ? new List<string>()
+            : definition.ActivationProblems()
+                .Concat(await readiness.ProblemsAsync(definition).ConfigureAwait(false))
+                .ToList();
 
         ViewData["CanConfigure"] = definition is not null
             && grants.TryGetValue(definition.CounterpartyId, out var level)

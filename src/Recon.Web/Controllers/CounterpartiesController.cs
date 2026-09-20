@@ -310,16 +310,24 @@ public sealed class CounterpartiesController(
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> ActivateDefinition(
         int counterpartyId, int definitionId, bool active,
-        [FromServices] ConfigurationRepository config)
+        [FromServices] ConfigurationRepository config,
+        [FromServices] DatasetReadiness readiness)
     {
         ArgumentNullException.ThrowIfNull(config);
+        ArgumentNullException.ThrowIfNull(readiness);
         await access.RequireAsync(User, counterpartyId, AccessLevel.Configure).ConfigureAwait(false);
 
         var definition = await config.LoadDefinitionAsync(definitionId).ConfigureAwait(false);
 
         if (active)
         {
-            var problems = definition.ActivationProblems();
+            // Including whether each side can read a file at all. A dataset
+            // activated before that was checked can still be paired into a
+            // definition, and then the mistake waits for the first upload.
+            var problems = definition.ActivationProblems()
+                .Concat(await readiness.ProblemsAsync(definition).ConfigureAwait(false))
+                .ToList();
+
             if (problems.Count > 0)
             {
                 TempData["Error"] = "Cannot activate: " + string.Join("; ", problems);

@@ -17,7 +17,8 @@ public sealed class DatasetsController(
     ConfigurationRepository config,
     Microsoft.Data.SqlClient.SqlConnection connection,
     AccessService access,
-    AuditService audit) : Controller
+    AuditService audit,
+    DatasetReadiness readiness) : Controller
 {
     /// <summary>
     /// The dataset screen. <paramref name="blank"/> means "no dataset
@@ -73,7 +74,7 @@ public sealed class DatasetsController(
         // rather than leaving it to be discovered at 3am.
         var formats = selected is null
             ? []
-            : await FormatsAsync(selected.DatasetId).ConfigureAwait(false);
+            : await readiness.FormatsAsync(selected.DatasetId).ConfigureAwait(false);
 
         ViewData["Formats"] = formats;
 
@@ -82,7 +83,7 @@ public sealed class DatasetsController(
         ViewData["Problems"] = selected is null
             ? new List<string>()
             : ActivationProblems(selected)
-                .Concat(FormatProblems(selected, formats))
+                .Concat(DatasetReadiness.FormatProblems(selected, formats))
                 .ToList();
 
         var format = formatId is { } chosen
@@ -560,7 +561,7 @@ public sealed class DatasetsController(
                 return RedirectToAction(nameof(Index), new { id = datasetId });
             }
 
-            var format = (await FormatsAsync(datasetId).ConfigureAwait(false))
+            var format = (await readiness.FormatsAsync(datasetId).ConfigureAwait(false))
                 .FirstOrDefault(f => f.CoversToday);
 
             if (format is not null && string.IsNullOrWhiteSpace(format.FileNamePattern))
@@ -735,38 +736,6 @@ public sealed class DatasetsController(
         return rows.Count == 0 ? null : rows[0];
     }
 
-    private Task<List<FormatRow>> FormatsAsync(int datasetId) =>
-        Db.QueryAsync(
-            connection,
-            """
-            SELECT f.FileFormatId, f.FormatType, f.Version, f.EffectiveFrom, f.EffectiveTo,
-                   f.Delimiter, f.TextQualifier, f.Encoding, f.HasHeader,
-                   f.SkipLeadingLines, f.SkipTrailingLines, f.RecordPath, f.FileNamePattern,
-                   f.MaxParseErrors,
-                   (SELECT COUNT(*) FROM cfg.FieldMapping WHERE FileFormatId = f.FileFormatId)
-            FROM cfg.FileFormatDefinition AS f
-            WHERE f.DatasetId = @ds
-            ORDER BY f.EffectiveFrom DESC, f.Version DESC;
-            """,
-            r => new FormatRow
-            {
-                FileFormatId = r.GetInt32(0),
-                FormatType = r.GetString(1),
-                Version = r.GetInt32(2),
-                EffectiveFrom = DateOnly.FromDateTime(r.GetDateTime(3)),
-                EffectiveTo = r.IsDBNull(4) ? null : DateOnly.FromDateTime(r.GetDateTime(4)),
-                Delimiter = r.GetNullableString("Delimiter"),
-                TextQualifier = r.GetNullableString("TextQualifier"),
-                Encoding = r.GetString(7),
-                HasHeader = r.GetBoolean(8),
-                SkipLeadingLines = r.GetInt32(9),
-                SkipTrailingLines = r.GetInt32(10),
-                RecordPath = r.GetNullableString("RecordPath"),
-                FileNamePattern = r.GetNullableString("FileNamePattern"),
-                MaxParseErrors = r.GetInt32(13),
-                MappingCount = r.GetInt32(14),
-            },
-            c => c.With("@ds", datasetId));
 
     private Task<List<MappingRow>> MappingsAsync(int fileFormatId) =>
         Db.QueryAsync(
@@ -806,73 +775,6 @@ public sealed class DatasetsController(
     /// without it gives up.
     /// </para>
     /// </summary>
-    /// <summary>
-    /// Whether this dataset could actually parse a file today.
-    ///
-    /// <para>
-    /// The roles gate asked whether the registry was complete and never
-    /// whether there was a layout to read a file with, so a dataset with no
-    /// file format — or with formats that all start tomorrow, or all ended
-    /// yesterday — activated happily and failed at the first upload with
-    /// "no file format effective on ...". That is a configuration mistake
-    /// discovered at run time, which is the one thing this screen exists to
-    /// prevent.
-    /// </para>
-    ///
-    /// <para>
-    /// Only for <see cref="ProviderType.File"/>: a dataset backed by a SQL
-    /// view has no file to lay out, and demanding a format for one would be
-    /// an invented rule.
-    /// </para>
-    /// </summary>
-    internal static List<string> FormatProblems(Dataset dataset, IReadOnlyList<FormatRow> formats)
-    {
-        ArgumentNullException.ThrowIfNull(dataset);
-        ArgumentNullException.ThrowIfNull(formats);
-
-        var problems = new List<string>();
-
-        if (dataset.Provider != ProviderType.File)
-        {
-            return problems;
-        }
-
-        if (formats.Count == 0)
-        {
-            problems.Add(
-                "no file format: a file cannot be parsed without one, and guessing a layout " +
-                "would stage wrong data");
-
-            return problems;
-        }
-
-        var inForce = formats.FirstOrDefault(f => f.CoversToday);
-
-        if (inForce is null)
-        {
-            var today = DateOnly.FromDateTime(DateTime.Today);
-            var ranges = string.Join(", ", formats
-                .OrderBy(f => f.EffectiveFrom)
-                .Select(f => $"v{f.Version} {f.EffectiveFrom:yyyy-MM-dd}→" +
-                             $"{(f.EffectiveTo?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "open")}"));
-
-            problems.Add(
-                $"no file format is effective today ({today:yyyy-MM-dd}) — what exists covers " +
-                $"{ranges}. A run for a date outside those ranges cannot parse its file.");
-
-            return problems;
-        }
-
-        if (inForce.MappingCount == 0)
-        {
-            problems.Add(
-                $"the format in force today (v{inForce.Version}) maps no fields, so it would " +
-                "stage nothing");
-        }
-
-        return problems;
-    }
-
     /// <summary>
     /// What is missing that does <b>not</b> block activation, per dataset. A
     /// warning drawn as an error teaches operators to ignore errors, so these
@@ -1051,10 +953,10 @@ public sealed class DatasetsController(
 
         if (active)
         {
-            var formats = await FormatsAsync(id).ConfigureAwait(false);
+            var formats = await readiness.FormatsAsync(id).ConfigureAwait(false);
 
             var problems = ActivationProblems(dataset)
-                .Concat(FormatProblems(dataset, formats))
+                .Concat(DatasetReadiness.FormatProblems(dataset, formats))
                 .ToList();
 
             if (problems.Count > 0)

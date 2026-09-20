@@ -66,6 +66,10 @@ builder.Services.AddScoped<Recon.Data.ConfigurationRepository>();
 builder.Services.AddScoped<Recon.Data.RunRepository>();
 builder.Services.AddScoped<AuditService>();
 builder.Services.AddScoped<AccessService>();
+
+// "Can this dataset read a file" — asked by the dataset screen, the
+// definition editor and the rule builder alike.
+builder.Services.AddScoped<DatasetReadiness>();
 builder.Services.AddScoped<PortalQueries>();
 builder.Services.AddScoped<ReportService>();
 builder.Services.AddScoped<SandboxService>();

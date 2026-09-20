@@ -186,6 +186,8 @@ Regardless of counterparty, every dataset must map **at minimum**: one reference
 
 **The transaction date is optional, and was not always.** It was required here until it was asked to be optional, and it can be: `TxDate` is the partition column, so it must come from somewhere deterministic, and for a dataset with no Date-role field that somewhere is the business date — which `RowParser` already did, because a summary feed is one row describing a whole session and has no transaction date of its own. What such a dataset gives up is real and is reported on the screen as an advisory rather than as a block: no `DateWithin` comparison against that side, and a transaction arriving late cannot be matched against the day it actually belongs to, because the matching window is a range over `TxDate` and every row now sits on the business date. Blocking activation over that was the platform deciding a business question it does not own.
 
+The same rule holds one level down, at the row. A Date-role field that is **not marked required** and arrives empty gets the business date too, rather than rejecting the row: "optional" has to mean the same thing in the registry as it does on the screen that says it. Marked **required**, an empty date still rejects the row — a row whose partition date was invented would sit in a partition that misrepresents it, and every later query over that range would be wrong. The field's own `IsRequired` is the switch, and the rejection message now says so.
+
 ---
 
 ## 7. Physical storage of dynamic fields — the hard trade-off

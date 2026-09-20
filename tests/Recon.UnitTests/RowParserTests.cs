@@ -159,6 +159,57 @@ public class RowParserTests
     }
 
     [Fact]
+    public void AnEmptyDateOnARequiredDateFieldRejectsTheRow()
+    {
+        // The field is required in the fixture, so an empty value is a
+        // rejected row rather than a row in the wrong partition.
+        var (ok, _, error) = Parse(
+            "E2E-1", "TXN-1", "0079012345", "125.500", "JOD", "", "Inward", "ACSC");
+
+        Assert.False(ok);
+        Assert.Equal(ParseErrorType.MissingRequired, error!.Type);
+        Assert.Equal("TX_DATETIME", error.FieldCode);
+    }
+
+    [Fact]
+    public void AnEmptyDateOnAnOptionalDateFieldFallsBackToTheBusinessDate()
+    {
+        /* Reported from a real file: every row had an empty date column, and
+           every row was rejected until the ceiling treated the whole file as
+           the wrong format. "Optional" has to mean the same thing here as on
+           the screen that says it — so a Date-role field nobody marked
+           required behaves like a dataset with no Date-role field at all. */
+        var full = Fixtures.CliqSession();
+        var optionalDate = full with
+        {
+            Fields = full.Fields
+                .Select(f => f.Role == FieldRole.Date ? f with { IsRequired = false } : f)
+                .ToList(),
+        };
+
+        var format = CliqFormat(optionalDate);
+        var parser = new RowParser(
+            optionalDate,
+            format with
+            {
+                Mappings = format.Mappings
+                    .Select(m => m.Field.Role == FieldRole.Date ? m with { IsRequired = false } : m)
+                    .ToList(),
+            },
+            Fixtures.Jod);
+
+        var record = new StagingRecord { LoadRunId = 4471 };
+
+        var ok = parser.TryParse(
+            Row("E2E-1", "TXN-1", "0079012345", "125.500", "JOD", "", "Inward", "ACSC"),
+            record, BusinessDate, out var error);
+
+        Assert.True(ok);
+        Assert.Null(error);
+        Assert.Equal(BusinessDate, record.TxDate);
+    }
+
+    [Fact]
     public void ParsesADateUsingTheConfiguredFormat()
     {
         var (ok, record, _) = Parse(

@@ -184,11 +184,19 @@ public sealed class FileStager(SqlConnection connection)
                     // 2M-row mistake recorded 2M times.
                     if (errors.Count > format.MaxParseErrors)
                     {
+                        // The FIRST failure, not the one that tripped the
+                        // ceiling: this message said "first problem" while
+                        // reporting the 1001st, which sends whoever is
+                        // debugging to the wrong line of a file whose real
+                        // problem started at the top.
+                        var first = errors[0];
+
                         throw new InvalidOperationException(
                             $"{dataset.Code}: parse errors exceeded MaxParseErrors " +
                             $"({format.MaxParseErrors}), so the file is being treated as the " +
-                            $"wrong format. First problem at line {failure!.RawRowNumber}: " +
-                            failure.Message);
+                            $"wrong format. First problem, at line {first.RawRowNumber}: " +
+                            $"{first.Message}. The ceiling was reached at line " +
+                            $"{failure!.RawRowNumber}.");
                     }
                 }
             }

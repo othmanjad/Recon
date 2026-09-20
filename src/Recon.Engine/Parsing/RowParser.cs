@@ -24,6 +24,14 @@ public sealed class RowParser
     private readonly SlotRef? _dateSlot;
     private readonly FieldRole? _dateRole;
 
+    /// <summary>
+    /// Whether a row is rejected when its Date-role field is empty, or falls
+    /// back to the business date. It follows the field's own
+    /// <c>IsRequired</c>, so "optional" means the same thing here as it does
+    /// everywhere else on that screen.
+    /// </summary>
+    private readonly bool _dateRequired;
+
     public RowParser(Dataset dataset, FileFormat format, Currency currency)
     {
         ArgumentNullException.ThrowIfNull(dataset);
@@ -48,6 +56,12 @@ public sealed class RowParser
         {
             _dateSlot = SlotRef.Parse(dateField.StorageSlot);
             _dateRole = FieldRole.Date;
+
+            // Required at either level rejects the row; otherwise an empty
+            // date is the same case as a dataset with no Date-role field at
+            // all, and gets the same answer.
+            _dateRequired = dateField.IsRequired
+                || format.Mappings.Any(m => m.Field.FieldCode == dateField.FieldCode && m.IsRequired);
         }
     }
 
@@ -172,17 +186,24 @@ public sealed class RowParser
             return true;
         }
 
-        if (_dateRole == FieldRole.Date)
+        if (_dateRole == FieldRole.Date && _dateRequired)
         {
+            var field = _dataset.FieldWithRole(FieldRole.Date);
+
             error = new ParseFailure(
                 ParseErrorType.MissingRequired,
-                _dataset.FieldWithRole(FieldRole.Date)?.FieldCode ?? "(date)",
-                "the Date-role field is empty, so the row has no partition date",
+                field?.FieldCode ?? "(date)",
+                $"the Date-role field '{field?.FieldCode ?? "(date)"}' is empty and is marked " +
+                "required, so the row has no partition date. Either the file's column is empty, " +
+                "or no mapping fills it — clear 'required' on the field to fall back to the " +
+                "business date instead.",
                 row.LineNumber,
                 row.RawLine);
             return false;
         }
 
+        // An empty date on a field nobody marked required: the business date
+        // stands in, exactly as it does for a dataset with no Date-role field.
         record.TxDate = businessDate;
         return true;
     }

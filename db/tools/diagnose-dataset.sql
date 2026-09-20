@@ -4,17 +4,23 @@
    Answers, in one pass, every reason a run can refuse to parse a
    dataset's file. Read only: it changes nothing.
 
+   EDIT THE TWO LINES BELOW, then run the file — in SSMS, in Azure Data
+   Studio, or through sqlcmd:
+
        sqlcmd -S localhost -U sa -P '...' -d ReconPlatform \
-              -v Code="OMReports" BusinessDate="2026-09-20" \
               -i db/tools/diagnose-dataset.sql
 
-   In SSMS, set the two values below by hand instead.
+   Plain literals on purpose: sqlcmd's $(var) placeholders are a syntax
+   error in SSMS unless SQLCMD Mode is switched on, which is an easy way
+   to get no answer at all from a script whose whole job is to give one.
    ===================================================================== */
 
 SET NOCOUNT ON;
 
-DECLARE @Code         VARCHAR(300) = '$(Code)';
-DECLARE @BusinessDate DATE         = '$(BusinessDate)';
+/* ---- EDIT THESE TWO ---- */
+DECLARE @Code         VARCHAR(300) = 'OMReports';     -- the dataset in the message
+DECLARE @BusinessDate DATE         = '2026-09-20';    -- the date in the message
+/* ------------------------- */
 
 PRINT '--- 0. WHERE AM I -----------------------------------------------';
 PRINT 'A portal pointed at a different database is the commonest cause of';

@@ -73,7 +73,11 @@ public sealed class FeeRunner(SqlConnection connection)
                 continue;
             }
 
-            var currency = currencies.TryGetValue(row.CurrencyCode ?? "JOD", out var c)
+            // The dataset's declared currency, not a hard-coded JOD: a row
+            // that did not name one is scaled by what the dataset says it is
+            // denominated in, which is the same value the parser used.
+            var currency = currencies.TryGetValue(
+                row.CurrencyCode ?? dataset.DefaultCurrency ?? "JOD", out var c)
                 ? c
                 : throw new InvalidOperationException(
                     $"staged row {row.StagingId} names currency '{row.CurrencyCode}', " +

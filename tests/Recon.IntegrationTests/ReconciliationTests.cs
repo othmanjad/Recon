@@ -530,10 +530,11 @@ public sealed class ReconciliationTests(SqlServerFixture sql)
             "SELECT COUNT_BIG(*) FROM ops.MatchResult WHERE RunId = @run;",
             c => c.With("@run", runId))!;
 
-    private sealed record Row(string Reference, long? AmountMinor, string Direction, string Status);
+    private sealed record Row(
+        string Reference, long? AmountMinor, string? Direction, string? Status, string? Currency = "JOD");
 
     [SkippableFact]
-    public async Task ARunWhoseAmountsAreAllNullStillCompletes()
+    public async Task ARunWhoseMappedColumnsAreAllEmptyStillCompletes()
     {
         /* Reported from a real run, as an unhandled exception page:
            "Cannot insert the value NULL into column 'AmountMinorSum', table
@@ -556,11 +557,17 @@ public sealed class ReconciliationTests(SqlServerFixture sql)
         var run = await runs.CreateRunAsync(
             definition, BusinessDate, "S1", RunType.Scheduled, "tests").ConfigureAwait(false);
 
+        /* Nothing but the reference mapped, which is what a file whose column
+           names do not match the mappings actually produces: every other slot
+           NULL. Currency is the one that bit second — it is NOT NULL with a
+           foreign key, and the dataset's declared currency is what stands in.
+           Direction and status are NULL too, because a run that survives one
+           empty column and dies on the next has not been fixed. */
         await StageAsync(connection, ids.LeftDatasetId, run.RunId, Enumerable.Range(1, 10)
-            .Select(i => new Row($"E2E-{i:D6}", null, "Inward", "ACSC")));
+            .Select(i => new Row($"E2E-{i:D6}", null, null, null, Currency: null)));
 
         await StageAsync(connection, ids.RightDatasetId, run.RunId, Enumerable.Range(1, 10)
-            .Select(i => new Row($"E2E-{i:D6}", null, "Inward", "ACSC")));
+            .Select(i => new Row($"E2E-{i:D6}", null, null, null, Currency: null)));
 
         var outcome = await new ReconciliationRunner(connection, runs)
             .ExecuteAsync(definition, run).ConfigureAwait(false);
@@ -590,6 +597,17 @@ public sealed class ReconciliationTests(SqlServerFixture sql)
             c => c.With("@run", run.RunId).With("@ds", ids.LeftDatasetId)).ConfigureAwait(false);
 
         Assert.Equal(10, rows);
+
+        // And the currency is the dataset's declared one rather than nothing.
+        var currency = await Db.ScalarAsync<string>(
+            connection,
+            """
+            SELECT CurrencyCode FROM ops.RunAggregate
+            WHERE RunId = @run AND DatasetId = @ds AND GroupKey = N'*' AND MatchStatus = N'*';
+            """,
+            c => c.With("@run", run.RunId).With("@ds", ids.LeftDatasetId)).ConfigureAwait(false);
+
+        Assert.Equal("JOD", currency);
     }
 
     /// <summary>
@@ -614,7 +632,7 @@ public sealed class ReconciliationTests(SqlServerFixture sql)
                 record.LoadRunId = loadRunId;
                 record.TxDate = BusinessDate;
                 record.Text[0] = row.Reference;                       // Text1
-                record.Text[4] = "JOD";                               // Text5
+                record.Text[4] = row.Currency;                        // Text5
                 record.Text[5] = row.Direction;                       // Text6
                 record.Text[6] = row.Status;                          // Text7
                 record.Text[20] = Engine.Parsing.Transforms.Normalize(row.Reference); // Text21

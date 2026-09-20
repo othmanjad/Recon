@@ -67,10 +67,20 @@ public static class RunAggregateBuilder
                 ? "CAST(0 AS BIGINT)"
                 : $"SUM(CAST(ISNULL(S.{SqlQueryBuilder.ResolveSlot(dataset, amount.FieldCode, requireMatchable: false)}, 0) AS BIGINT))";
 
+            /* Same hazard as the amount, and it bit next: CurrencyCode is NOT
+               NULL with a foreign key, and a Currency-role field whose column
+               mapped to nothing leaves every row NULL. The dataset's declared
+               currency is the answer in both cases — when there is no
+               Currency-role field at all, and when the field is there and the
+               row did not say. It is the same value the parser already used to
+               scale the amounts into minor units, so the aggregate cannot
+               disagree with what it is summing. */
+            var declared = "CAST(" + p.Add(dataset.DefaultCurrency ?? "JOD") + " AS CHAR(3))";
+
             var currency = dataset.FieldWithRole(FieldRole.Currency);
             var currencyColumn = currency is null
-                ? "CAST(" + p.Add(dataset.DefaultCurrency ?? "JOD") + " AS CHAR(3))"
-                : $"CAST(S.{SqlQueryBuilder.ResolveSlot(dataset, currency.FieldCode, requireMatchable: false)} AS CHAR(3))";
+                ? declared
+                : $"ISNULL(CAST(S.{SqlQueryBuilder.ResolveSlot(dataset, currency.FieldCode, requireMatchable: false)} AS CHAR(3)), {declared})";
 
             // The Direction-role field is what makes "inward total" meaningful
             // for any counterparty without naming its columns (§6).

@@ -1,7 +1,9 @@
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Recon.Domain.Conditions;
 using Recon.Domain.Configuration;
 using Recon.Engine.Sql;
+using Recon.Engine.Totals;
 using Xunit;
 
 namespace Recon.UnitTests;
@@ -494,8 +496,14 @@ public class PassWorkingSetTests
         // the Amount pair compares the SUM to the reported total — which is
         // what makes "one summary line ↔ many transactions" an ordinary rule.
         Assert.Contains("GROUP BY L.Text6", statement.Sql, StringComparison.Ordinal);
-        Assert.Contains("SUM(CAST(L.Num1 AS BIGINT))", statement.Sql, StringComparison.Ordinal);
         Assert.Contains("G.AmountMinorSum = R.Num1", statement.Sql, StringComparison.Ordinal);
+
+        // NULL-safe, and this assertion used to demand the opposite: a group
+        // whose amounts are all NULL sums to NULL, and a NULL total compares
+        // equal to nothing — so the two sides would silently fail to match
+        // instead of matching on zero.
+        Assert.Contains(
+            "SUM(CAST(ISNULL(L.Num1, 0) AS BIGINT))", statement.Sql, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -567,5 +575,32 @@ public class PassWorkingSetTests
             new DateOnly(2026, 9, 12), new DateOnly(2026, 9, 14));
 
         Assert.DoesNotContain("UPDATE", statement.Sql, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EveryAmountSumIsNullSafe()
+    {
+        /* ops.RunAggregate.AmountMinorSum is NOT NULL, and SUM over a group
+           whose amounts are all NULL returns NULL. A real run died on
+           "Cannot insert the value NULL into column 'AmountMinorSum'" after
+           an amount column that mapped to nothing, and the only hint was a
+           warning nobody reads: "Null value is eliminated by an aggregate".
+
+           So no amount sum may reach the text bare. This asserts the shape
+           rather than the behaviour because the behaviour needs a server —
+           the integration suite covers that — and a regression here is a
+           one-character edit. */
+        var definition = Fixtures.CliqOm();
+
+        var sql = RunAggregateBuilder.Compile(
+            definition,
+            runId: 4471,
+            stagingRunId: 4471,
+            businessDate: new DateOnly(2026, 9, 13),
+            windowFrom: new DateOnly(2026, 9, 12),
+            windowTo: new DateOnly(2026, 9, 14)).Sql;
+
+        Assert.Contains("SUM(CAST(ISNULL(", sql, StringComparison.Ordinal);
+        Assert.DoesNotMatch(new Regex(@"SUM\(CAST\(S\.\w+ AS BIGINT\)\)"), sql);
     }
 }

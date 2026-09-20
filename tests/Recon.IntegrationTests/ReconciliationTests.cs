@@ -530,7 +530,67 @@ public sealed class ReconciliationTests(SqlServerFixture sql)
             "SELECT COUNT_BIG(*) FROM ops.MatchResult WHERE RunId = @run;",
             c => c.With("@run", runId))!;
 
-    private sealed record Row(string Reference, long AmountMinor, string Direction, string Status);
+    private sealed record Row(string Reference, long? AmountMinor, string Direction, string Status);
+
+    [SkippableFact]
+    public async Task ARunWhoseAmountsAreAllNullStillCompletes()
+    {
+        /* Reported from a real run, as an unhandled exception page:
+           "Cannot insert the value NULL into column 'AmountMinorSum', table
+           'rec.ops.RunAggregate'". The amount column had mapped to nothing, so
+           every staged row carried NULL, and SUM over a group of NULLs is NULL
+           — which that NOT NULL column refused. The only other clue was a
+           warning nobody reads: "Null value is eliminated by an aggregate".
+
+           A row with no amount contributes nothing to the total and is still
+           counted. Nothing here should fail. */
+        Skip.IfNot(sql.Available, sql.SkipReason);
+
+        using var connection = await sql.OpenAsync().ConfigureAwait(false);
+        var ids = await TestConfiguration.CreateAsync(connection).ConfigureAwait(false);
+
+        var config = new ConfigurationRepository(connection);
+        var definition = await config.LoadDefinitionAsync(ids.DefinitionId).ConfigureAwait(false);
+
+        var runs = new RunRepository(connection);
+        var run = await runs.CreateRunAsync(
+            definition, BusinessDate, "S1", RunType.Scheduled, "tests").ConfigureAwait(false);
+
+        await StageAsync(connection, ids.LeftDatasetId, run.RunId, Enumerable.Range(1, 10)
+            .Select(i => new Row($"E2E-{i:D6}", null, "Inward", "ACSC")));
+
+        await StageAsync(connection, ids.RightDatasetId, run.RunId, Enumerable.Range(1, 10)
+            .Select(i => new Row($"E2E-{i:D6}", null, "Inward", "ACSC")));
+
+        var outcome = await new ReconciliationRunner(connection, runs)
+            .ExecuteAsync(definition, run).ConfigureAwait(false);
+
+        Assert.Equal(RunStatus.Completed, outcome.Status);
+
+        // Ten pairs, counted as the twenty rows they are.
+        Assert.Equal(20, outcome.Counts.Matched);
+
+        // The rows are counted and the total is zero — not absent, not NULL.
+        var total = await Db.ScalarAsync<long>(
+            connection,
+            """
+            SELECT AmountMinorSum FROM ops.RunAggregate
+            WHERE RunId = @run AND DatasetId = @ds AND GroupKey = N'*' AND MatchStatus = N'*';
+            """,
+            c => c.With("@run", run.RunId).With("@ds", ids.LeftDatasetId)).ConfigureAwait(false);
+
+        Assert.Equal(0, total);
+
+        var rows = await Db.ScalarAsync<long>(
+            connection,
+            """
+            SELECT RowCnt FROM ops.RunAggregate
+            WHERE RunId = @run AND DatasetId = @ds AND GroupKey = N'*' AND MatchStatus = N'*';
+            """,
+            c => c.With("@run", run.RunId).With("@ds", ids.LeftDatasetId)).ConfigureAwait(false);
+
+        Assert.Equal(10, rows);
+    }
 
     /// <summary>
     /// Stages rows through the real bulk loader, so the load path under test is

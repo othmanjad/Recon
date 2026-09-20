@@ -87,7 +87,11 @@ public static partial class SqlQueryBuilderAggregate
         sql.AppendLine("SELECT");
         sql.AppendLine("    " + keyExpression + " AS GroupKey,");
         sql.AppendLine("    " + groupColumns + ",");
-        sql.AppendLine(CultureInfo.InvariantCulture, $"    SUM(CAST(L.{amountSlot} AS BIGINT)) AS AmountMinorSum,");
+        // NULL-safe for the same reason as ops.RunAggregate: a group whose
+        // amounts are all NULL sums to NULL, and a NULL total compares equal
+        // to nothing — the two sides would silently fail to match rather than
+        // matching on zero.
+        sql.AppendLine(CultureInfo.InvariantCulture, $"    SUM(CAST(ISNULL(L.{amountSlot}, 0) AS BIGINT)) AS AmountMinorSum,");
         sql.AppendLine("    COUNT_BIG(*) AS RowCnt,");
         sql.AppendLine("    MIN(L.StagingId) AS AnyStagingId,");
         sql.AppendLine("    MIN(L.TxDate) AS AnyTxDate");

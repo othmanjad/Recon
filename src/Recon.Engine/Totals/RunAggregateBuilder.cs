@@ -54,10 +54,18 @@ public static class RunAggregateBuilder
             var sideName = p.Add(side.ToString());
             var datasetId = p.Add(dataset.DatasetId);
 
+            /* The coalesce is inside the SUM, not around it, and it is not
+               decoration: AmountMinorSum is NOT NULL, and SUM over a group
+               whose amounts are all NULL returns NULL — which killed a real
+               run with "Cannot insert the value NULL into column
+               'AmountMinorSum'" after an amount column that mapped to nothing.
+               A row with no amount contributes nothing to the total; it is
+               still counted, because COUNT_BIG(*) counts rows and not
+               amounts. */
             var amount = dataset.FieldWithRole(FieldRole.Amount);
             var amountSum = amount is null
                 ? "CAST(0 AS BIGINT)"
-                : $"SUM(CAST(S.{SqlQueryBuilder.ResolveSlot(dataset, amount.FieldCode, requireMatchable: false)} AS BIGINT))";
+                : $"SUM(CAST(ISNULL(S.{SqlQueryBuilder.ResolveSlot(dataset, amount.FieldCode, requireMatchable: false)}, 0) AS BIGINT))";
 
             var currency = dataset.FieldWithRole(FieldRole.Currency);
             var currencyColumn = currency is null

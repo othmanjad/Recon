@@ -196,7 +196,7 @@ public static class ControlTotalEvaluator
 
         // The current-run rule: superseded reruns and sandbox runs are excluded
         // by joining the run, not by hoping nobody re-ran the day.
-        return $"SELECT SUM({column}) FROM ops.RunAggregate AS A " +
+        return $"SELECT ISNULL(SUM({column}), 0) FROM ops.RunAggregate AS A " +
                $"JOIN ops.ReconRun AS R ON R.RunId = A.RunId " +
                $"WHERE A.DefinitionId = {def} AND {scopeClause} " +
                $"AND A.GroupKey = {groupKey} AND A.MatchStatus = {status}" +
@@ -211,7 +211,11 @@ public static class ControlTotalEvaluator
                 $"dataset {dataset.Code} has no Amount-role field, so it cannot be summed");
 
         var slot = SqlQueryBuilder.ResolveSlot(dataset, amount.FieldCode, requireMatchable: false);
-        return $"SUM(CAST(S.{slot} AS BIGINT))";
+
+        // A control total that evaluates to NULL is worse than one that
+        // evaluates to zero: it compares equal to nothing, so the check
+        // neither balances nor reports a difference anyone can read.
+        return $"SUM(CAST(ISNULL(S.{slot}, 0) AS BIGINT))";
     }
 
     private static Domain.Configuration.Dataset ResolveDataset(

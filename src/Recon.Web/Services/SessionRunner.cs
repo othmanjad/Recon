@@ -316,6 +316,17 @@ public sealed class SessionRunner(
             // the run already carries the failed step.
             return SessionOutcome.Refused(ex.Message);
         }
+        catch (SqlException ex)
+        {
+            // The server refused a statement. ReconciliationRunner has already
+            // marked the run and the step failed with this same message, so
+            // the run page tells the whole story — but only if the operator is
+            // sent there. Letting it out of here produced an unhandled
+            // exception page with a stack trace, which is the developer's view
+            // of a problem the operator is the one holding.
+            return SessionOutcome.Refused(
+                "The run failed in the database and is recorded as Failed: " + ex.Message);
+        }
         finally
         {
             await _runs.ReleaseRunLockAsync(definitionId, businessDate, sessionRef, cancellationToken)

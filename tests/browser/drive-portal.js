@@ -485,6 +485,29 @@ async function shot(page, name) {
     check(csv.split("\n").filter(l => l.trim()).length >= 2,
         "the exported CSV has a header and no rows");
 
+    /* And the .xlsx, which nothing had ever downloaded. An xlsx is a ZIP
+       package whose writer reads back and seeks in the stream it is building,
+       and an HTTP response body does neither — so every Excel export in the
+       portal answered "The stream was not opened for reading" until a real
+       download was asked for here. */
+    const xlsxDownload = omar.waitForEvent("download", { timeout: 30000 });
+    await omar.locator('tr:has-text("EXCEPTIONS_XLSX") a:has-text("Download")').click();
+    const xlsxFile = await xlsxDownload;
+    const savedXlsx = path.join(OUT, "exceptions.xlsx");
+    await xlsxFile.saveAs(savedXlsx);
+
+    const workbook = fs.readFileSync(savedXlsx);
+
+    // "PK\x03\x04" is a ZIP local file header: a real package, not an error
+    // page saved under an .xlsx name.
+    check(workbook.length > 1000,
+        `the exported workbook is ${workbook.length} bytes, which is not a workbook`);
+    check(workbook[0] === 0x50 && workbook[1] === 0x4B
+        && workbook[2] === 0x03 && workbook[3] === 0x04,
+        "the exported workbook does not start with a ZIP header");
+    check(workbook.includes(Buffer.from("xl/workbook.xml")),
+        "the exported workbook has no workbook part");
+
     await shot(omar, "reports");
 
     // The export must be in the audit log: regulators ask who downloaded

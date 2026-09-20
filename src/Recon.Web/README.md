@@ -183,7 +183,7 @@ cd tests/browser && npm install          # playwright only
 node drive-portal.js                     # needs the portal running
 ```
 
-133 assertions in a real browser against the real database: every screen
+136 assertions in a real browser against the real database: every screen
 renders with its shell intact and no console error, the rule builder offers no
 field the registry withholds, a withheld field in a filter is rejected and a
 valid one accepted, a non-sargable comparison warns and warns harder in pass 1,

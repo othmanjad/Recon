@@ -39,6 +39,47 @@ public sealed class ExcelReportWriter(ExcelReportOptions? options = null)
         ArgumentNullException.ThrowIfNull(reader);
         ArgumentNullException.ThrowIfNull(destination);
 
+        // An .xlsx is a ZIP package, and the package writer reads back and
+        // seeks in the stream it is building — it does not simply append. An
+        // HTTP response body does neither, which is why writing a workbook
+        // straight to it failed with "The stream was not opened for reading"
+        // every time anyone downloaded one.
+        if (destination.CanSeek && destination.CanRead)
+        {
+            return await WriteWorkbookAsync(
+                reader, destination, sheetName, columns, cancellationToken).ConfigureAwait(false);
+        }
+
+        // A temporary FILE rather than a MemoryStream: this writer exists to
+        // keep memory flat at two million rows, and buffering the workbook in
+        // RAM to satisfy the package would give that away at exactly the size
+        // where it matters. DeleteOnClose means it goes even if this throws.
+        var scratch = Path.Combine(
+            Path.GetTempPath(), $"recon-report-{Guid.NewGuid():N}.xlsx");
+
+        var file = new FileStream(
+            scratch, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None,
+            bufferSize: 64 * 1024, FileOptions.DeleteOnClose | FileOptions.Asynchronous);
+
+        await using (file.ConfigureAwait(false))
+        {
+            var result = await WriteWorkbookAsync(
+                reader, file, sheetName, columns, cancellationToken).ConfigureAwait(false);
+
+            file.Position = 0;
+            await file.CopyToAsync(destination, cancellationToken).ConfigureAwait(false);
+
+            return result;
+        }
+    }
+
+    private async Task<ReportResult> WriteWorkbookAsync(
+        SqlDataReader reader,
+        Stream destination,
+        string sheetName,
+        IReadOnlyList<ReportColumn>? columns,
+        CancellationToken cancellationToken)
+    {
         var amountScales = CsvReportWriter.AmountScales(reader, columns);
         var headers = Enumerable.Range(0, reader.FieldCount).Select(reader.GetName).ToList();
 

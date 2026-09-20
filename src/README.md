@@ -109,7 +109,7 @@ The portal has its own runner and its own browser suite:
 
 ```bash
 ./demo/run-portal.sh --background          # serve it against the demo database
-node tests/browser/drive-portal.js         # 133 assertions in Chromium
+node tests/browser/drive-portal.js         # 136 assertions in Chromium
 ```
 
 The integration tests **skip** rather than fail when `RECON_TEST_CONNECTION` is

@@ -184,27 +184,45 @@ function csvFor(date) {
     for (const field of LEFT_FIELDS) { await addField(leftId, field); }
     for (const field of RIGHT_FIELDS) { await addField(rightId, field); }
 
-    // The activation gate should now be satisfied: the four required roles
-    // mapped, and Date mapped too because these are transaction feeds.
+    /* The roles are in place, but there is still no file format — and a
+       dataset with no layout cannot read a file at all. That used to activate
+       happily and fail at the first upload with "no file format effective
+       on ...", which is a configuration mistake discovered at run time. */
     await page.goto(`${BASE}/datasets?id=${leftId}`, { waitUntil: "load" });
     body = await page.locator("body").innerText();
 
-    check(/can be activated/.test(body),
-        `the left dataset's activation gate is not satisfied: ${activationText(body)}`);
+    check(!/missing universal role/.test(body),
+        `the left registry is incomplete: ${activationText(body)}`);
+    check(/no file format/.test(body),
+        "the screen did not say that a dataset with no file format cannot load a file");
+    check(!/can be activated/.test(body),
+        "a dataset with no file format claimed it was ready to activate");
 
     check(LEFT_FIELDS.every(f => body.includes(f.code)),
         "not every field was saved into the left registry");
 
+    // And the button agrees with the panel.
+    const earlyToggle = page.locator('form[action*="/Datasets/Activate"] button').first();
+    if ((await earlyToggle.innerText()).trim() === "Activate") {
+        await submit(page, earlyToggle, 60000);
+        body = await page.locator("body").innerText();
+
+        check(/Cannot activate/.test(body) && /no file format/.test(body),
+            `a dataset with no file format was activated anyway: ${firstAlert(body)}`);
+    }
+
+    await page.goto(`${BASE}/datasets?id=${leftId}`, { waitUntil: "load" });
     await shot(page, "onboard-1-registry");
 
     /* The right side has no Date-role field, and that must be an ADVISORY, not
        a block: the gate refusing it would be the platform deciding a business
-       question it does not own. */
+       question it does not own. The missing format is the only thing standing
+       in its way here. */
     await page.goto(`${BASE}/datasets?id=${rightId}`, { waitUntil: "load" });
     body = await page.locator("body").innerText();
 
-    check(/can be activated/.test(body),
-        `a dataset with no Date-role field was refused activation: ${activationText(body)}`);
+    check(!/missing universal role/.test(body),
+        `a dataset with no Date-role field was told a role was missing: ${activationText(body)}`);
     check(/no Date-role field/.test(body),
         "the screen did not say what a dataset without a Date-role field gives up");
     check(/business date/.test(body),
@@ -269,7 +287,8 @@ function csvFor(date) {
     await shot(page, "onboard-2-mappings");
 
     // =================================================================
-    // 4. Activate both datasets.
+    // 4. Activate both datasets — now that each has a layout to read its
+    //    file with, the gate lifts.
     // =================================================================
     for (const id of [leftId, rightId]) {
         await page.goto(`${BASE}/datasets?id=${id}`, { waitUntil: "load" });
@@ -278,7 +297,7 @@ function csvFor(date) {
         if ((await toggle.innerText()).trim() === "Activate") {
             await submit(page, toggle, 60000);
             check(/activated\./.test(await page.locator("body").innerText()),
-                `activating dataset ${id} was refused`);
+                `activating dataset ${id} was refused once it had a format and mappings`);
         }
     }
 

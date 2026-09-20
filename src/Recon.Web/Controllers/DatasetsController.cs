@@ -47,7 +47,6 @@ public sealed class DatasetsController(
             ? null
             : datasets.First(d => d.DatasetId == selected.DatasetId);
 
-        ViewData["Problems"] = selected is null ? [] : ActivationProblems(selected);
         ViewData["Advisories"] = selected is null ? [] : ActivationAdvisories(selected);
 
         ViewData["Counterparties"] = (await queries.CounterpartiesAsync(User).ConfigureAwait(false))
@@ -77,6 +76,14 @@ public sealed class DatasetsController(
             : await FormatsAsync(selected.DatasetId).ConfigureAwait(false);
 
         ViewData["Formats"] = formats;
+
+        // The roles and the layout are one question on this screen — "can this
+        // dataset load a file" — so they are one list.
+        ViewData["Problems"] = selected is null
+            ? new List<string>()
+            : ActivationProblems(selected)
+                .Concat(FormatProblems(selected, formats))
+                .ToList();
 
         var format = formatId is { } chosen
             ? formats.FirstOrDefault(f => f.FileFormatId == chosen)
@@ -800,6 +807,73 @@ public sealed class DatasetsController(
     /// </para>
     /// </summary>
     /// <summary>
+    /// Whether this dataset could actually parse a file today.
+    ///
+    /// <para>
+    /// The roles gate asked whether the registry was complete and never
+    /// whether there was a layout to read a file with, so a dataset with no
+    /// file format — or with formats that all start tomorrow, or all ended
+    /// yesterday — activated happily and failed at the first upload with
+    /// "no file format effective on ...". That is a configuration mistake
+    /// discovered at run time, which is the one thing this screen exists to
+    /// prevent.
+    /// </para>
+    ///
+    /// <para>
+    /// Only for <see cref="ProviderType.File"/>: a dataset backed by a SQL
+    /// view has no file to lay out, and demanding a format for one would be
+    /// an invented rule.
+    /// </para>
+    /// </summary>
+    internal static List<string> FormatProblems(Dataset dataset, IReadOnlyList<FormatRow> formats)
+    {
+        ArgumentNullException.ThrowIfNull(dataset);
+        ArgumentNullException.ThrowIfNull(formats);
+
+        var problems = new List<string>();
+
+        if (dataset.Provider != ProviderType.File)
+        {
+            return problems;
+        }
+
+        if (formats.Count == 0)
+        {
+            problems.Add(
+                "no file format: a file cannot be parsed without one, and guessing a layout " +
+                "would stage wrong data");
+
+            return problems;
+        }
+
+        var inForce = formats.FirstOrDefault(f => f.CoversToday);
+
+        if (inForce is null)
+        {
+            var today = DateOnly.FromDateTime(DateTime.Today);
+            var ranges = string.Join(", ", formats
+                .OrderBy(f => f.EffectiveFrom)
+                .Select(f => $"v{f.Version} {f.EffectiveFrom:yyyy-MM-dd}→" +
+                             $"{(f.EffectiveTo?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "open")}"));
+
+            problems.Add(
+                $"no file format is effective today ({today:yyyy-MM-dd}) — what exists covers " +
+                $"{ranges}. A run for a date outside those ranges cannot parse its file.");
+
+            return problems;
+        }
+
+        if (inForce.MappingCount == 0)
+        {
+            problems.Add(
+                $"the format in force today (v{inForce.Version}) maps no fields, so it would " +
+                "stage nothing");
+        }
+
+        return problems;
+    }
+
+    /// <summary>
     /// What is missing that does <b>not</b> block activation, per dataset. A
     /// warning drawn as an error teaches operators to ignore errors, so these
     /// are rendered apart from <see cref="ActivationProblems"/>.
@@ -977,7 +1051,12 @@ public sealed class DatasetsController(
 
         if (active)
         {
-            var problems = ActivationProblems(dataset);
+            var formats = await FormatsAsync(id).ConfigureAwait(false);
+
+            var problems = ActivationProblems(dataset)
+                .Concat(FormatProblems(dataset, formats))
+                .ToList();
+
             if (problems.Count > 0)
             {
                 TempData["Error"] = "Cannot activate: " + string.Join("; ", problems);

@@ -103,6 +103,65 @@ public class TransformTests
         Assert.Equal("E2E202609130099412", normalized[0]);
     }
 
+    /* Map: the operation the direction columns need. Two sides spell one
+       meaning differently — STTS_CD says debt/crdt, the other side sends a
+       boolean — and a reconciliation cannot compare them until one vocabulary
+       is chosen at parse time. */
+
+    private const string DirectionMap = """
+        [{"op":"Map","cases":[{"from":"true","to":"Inward"},{"from":"false","to":"Outward"}]}]
+        """;
+
+    [Theory]
+    [InlineData("true", "Inward")]
+    [InlineData("false", "Outward")]
+    [InlineData("TRUE", "Inward")]
+    [InlineData("False", "Outward")]
+    public void MapTranslatesAWholeValue(string input, string expected) =>
+        Assert.Equal(expected, Apply(input, DirectionMap));
+
+    [Fact]
+    public void MapLeavesAValueItDoesNotNameAlone() =>
+        // Not "Outward", and not empty: a spelling nobody anticipated reaches
+        // staging as it was written, where a rule can catch it. Turning it
+        // into one of the two known values would be inventing data.
+        Assert.Equal("maybe", Apply("maybe", DirectionMap));
+
+    [Fact]
+    public void MapUsesOtherwiseWhenTheConfigurationSaysWhatToDoWithAStranger() =>
+        Assert.Equal("UNKNOWN", Apply("maybe", """
+            [{"op":"Map","cases":[{"from":"true","to":"Inward"}],"otherwise":"UNKNOWN"}]
+            """));
+
+    [Fact]
+    public void MapMatchesTheWholeValueRatherThanASubstring()
+    {
+        // This is why Map exists beside Replace: Replace would rewrite the
+        // token wherever it appeared.
+        Assert.Equal("not true", Apply("not true", DirectionMap));
+        Assert.Equal("not Inward", Apply("not true", """
+            [{"op":"Replace","from":"true","to":"Inward"}]
+            """));
+    }
+
+    [Fact]
+    public void MapCanBeCaseSensitiveWhenTheFileReallyMeansIt() =>
+        Assert.Equal("D", Apply("D", """
+            [{"op":"Map","ignoreCase":false,"cases":[{"from":"d","to":"Debit"}]}]
+            """));
+
+    [Fact]
+    public void MapNeedsACase() =>
+        Assert.Throws<TransformException>(() => Transforms.Parse("""[{"op":"Map","cases":[]}]"""));
+
+    [Fact]
+    public void MapRefusesAValueItNamesTwice() =>
+        // The second line could never fire, and the one it shadows is rarely
+        // the one that was meant.
+        Assert.Throws<TransformException>(() => Transforms.Parse("""
+            [{"op":"Map","cases":[{"from":"true","to":"Inward"},{"from":"TRUE","to":"Outward"}]}]
+            """));
+
     [Fact]
     public void NormalizeIsIdempotent()
     {

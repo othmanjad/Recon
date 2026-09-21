@@ -186,6 +186,15 @@ jQuery(function ($) {
     $formatType.on("change", syncMappingHints);
     syncMappingHints();
 
+    /* The transform chain is built from rows, not typed as JSON — the same
+       treatment the rule screen's conditions got, on the screen that decides
+       what a value MEANS before any rule ever sees it. */
+    var txBuilder = window.ReconTransforms && window.ReconTransforms.attach({
+        container: "#txBuilder",
+        hidden: "#transformChainJson",
+        advanced: "#txJsonRaw"
+    });
+
     $(".rc-mapping-edit").on("click", function () {
         var $b = $(this);
 
@@ -193,7 +202,8 @@ jQuery(function ($) {
         $("#mapFieldCode").val($b.data("field"));
         $("#sourcePath").val($b.data("path"));
         $("#parseFormat").val($b.data("format") || "");
-        $("#transformChainJson").val($b.data("transforms") || "");
+        if (txBuilder) { txBuilder.load($b.data("transforms") || ""); }
+        $("#txJsonRaw").val("");
         $("#defaultValue").val($b.data("default") || "");
         $("#mapRequired").prop("checked", $b.data("required") === true || $b.data("required") === "true");
 
@@ -204,6 +214,11 @@ jQuery(function ($) {
     $("#rc-mapping-reset").on("click", function () {
         $("#rc-mapping-form")[0].reset();
         $("#fieldMappingId").val("");
+
+        // A form reset returns a hidden input to its default, which is empty
+        // — so the builder has to say again what it holds.
+        if (txBuilder) { txBuilder.load(""); }
+
         syncMappingHints();
     });
 });

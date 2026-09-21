@@ -39,6 +39,37 @@ public sealed class TransformStep
 
     [JsonPropertyName("to")]
     public string? To { get; set; }
+
+    /// <summary>The cases of a <c>Map</c>, in order. First match wins.</summary>
+    [JsonPropertyName("cases")]
+    public List<MapCase>? Cases { get; set; }
+
+    /// <summary>
+    /// What a <c>Map</c> does with a value none of its cases names. Absent
+    /// means "leave it alone", which is the safe default: a value nobody
+    /// anticipated should arrive at staging as it was written, where a rule
+    /// can see it, rather than be quietly turned into something else.
+    /// </summary>
+    [JsonPropertyName("otherwise")]
+    public string? Otherwise { get; set; }
+
+    /// <summary>
+    /// Whether a <c>Map</c> matches regardless of case. Defaults to true:
+    /// partners send TRUE, True and true for the same thing, and a map that
+    /// caught one of the three would be a map that silently half-worked.
+    /// </summary>
+    [JsonPropertyName("ignoreCase")]
+    public bool? IgnoreCase { get; set; }
+}
+
+/// <summary>One "this value means that value" line of a <c>Map</c>.</summary>
+public sealed class MapCase
+{
+    [JsonPropertyName("from")]
+    public string? From { get; set; }
+
+    [JsonPropertyName("to")]
+    public string? To { get; set; }
 }
 
 public static class Transforms
@@ -98,6 +129,7 @@ public static class Transforms
         "Substring",
         "RegexExtract",
         "Replace",
+        "Map",
     ];
 
     public static void Validate(TransformStep step)
@@ -148,6 +180,41 @@ public static class Transforms
 
                 break;
 
+            /* Replace substitutes a SUBSTRING, which is the wrong tool for a
+               vocabulary: mapping "true" to "Inward" with it also rewrites
+               "not true" and anything else the token appears inside. Map
+               compares the whole value, which is what "this code means that
+               one" actually means. */
+            case "Map":
+                if (step.Cases is null || step.Cases.Count == 0)
+                {
+                    throw new TransformException("Map needs at least one case");
+                }
+
+                var comparer = step.IgnoreCase == false
+                    ? StringComparer.Ordinal
+                    : StringComparer.OrdinalIgnoreCase;
+
+                var seen = new HashSet<string>(comparer);
+
+                foreach (var one in step.Cases)
+                {
+                    if (one.From is null)
+                    {
+                        throw new TransformException("every Map case needs a 'from'");
+                    }
+
+                    // A repeated 'from' is a line that can never fire, and
+                    // the one it shadows is rarely the one meant.
+                    if (!seen.Add(one.From))
+                    {
+                        throw new TransformException(
+                            $"Map names '{one.From}' twice; the second can never apply");
+                    }
+                }
+
+                break;
+
             default:
                 throw new TransformException($"unknown transform '{step.Op}'");
         }
@@ -186,8 +253,29 @@ public static class Transforms
         "Substring" => Substring(value, step),
         "RegexExtract" => RegexExtract(value, step),
         "Replace" => value.Replace(step.From!, step.To ?? string.Empty, StringComparison.Ordinal),
+        "Map" => Map(value, step),
         _ => throw new TransformException($"unknown transform '{step.Op}'"),
     };
+
+    private static string Map(string value, TransformStep step)
+    {
+        var comparison = step.IgnoreCase == false
+            ? StringComparison.Ordinal
+            : StringComparison.OrdinalIgnoreCase;
+
+        foreach (var one in step.Cases!)
+        {
+            if (string.Equals(value, one.From, comparison))
+            {
+                return one.To ?? string.Empty;
+            }
+        }
+
+        // No case names this value: "otherwise" when the configuration says
+        // what to do with a stranger, and otherwise the value itself, so that
+        // an unmapped spelling reaches staging where a rule can find it.
+        return step.Otherwise ?? value;
+    }
 
     private static string Substring(string value, TransformStep step)
     {

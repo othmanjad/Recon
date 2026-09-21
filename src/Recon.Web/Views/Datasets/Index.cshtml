@@ -869,10 +869,27 @@ else
                         </div>
 
                         <div class="col-12">
-                            <label class="form-label" for="transformChainJson">Transform chain</label>
-                            <input class="form-control rc-mono" id="transformChainJson"
-                                   name="transformChainJson"
-                                   placeholder='[{"op":"Trim"},{"op":"Upper"}]'>
+                            <label class="form-label">
+                                معالجة القيمة قبل تخزينها · Transform chain
+                            </label>
+                            @*
+                                Built from rows, not typed as JSON. This is the
+                                screen an operator reaches BEFORE the rules, and
+                                a transform chain is how a partner's vocabulary
+                                becomes the platform's — "true" becoming
+                                "Inward" is what lets two sides that mean the
+                                same thing ever match.
+                            *@
+                            <div id="txBuilder"></div>
+                            <input type="hidden" id="transformChainJson" name="transformChainJson">
+
+                            <details class="mt-2">
+                                <summary class="rc-help">تعديل السلسلة كـ JSON · advanced</summary>
+                                <input class="form-control form-control-sm rc-mono mt-2" id="txJsonRaw"
+                                       aria-label="Transform chain JSON"
+                                       placeholder='[{"op":"Trim"},{"op":"Upper"}]'>
+                                <div class="form-text">يُطبَّق عند الحفظ ويستبدل ما بُني أعلاه.</div>
+                            </details>
                             @*
                                 Validated by the engine's own parser on save, so
                                 the portal accepts exactly what the loader will.
@@ -883,15 +900,16 @@ else
                                 does not know sends an operator to a failed run.
                             *@
                             <div class="form-text">
-                                A JSON array of steps, validated by the loader's own parser on save:
+                                Validated by the loader's own parser on save. The steps it knows:
                                 @Html.Raw(string.Join(", ",
                                     Recon.Engine.Parsing.Transforms.Operations
                                         .Select(o => $"<code>{o}</code>"))).
-                                <code>Substring</code> takes <code>start</code> and
-                                <code>length</code>, <code>RegexExtract</code> a
-                                <code>pattern</code>, <code>Replace</code> a <code>from</code> and
-                                <code>to</code>. A regex here runs against two million values per
-                                file, so it is bounded by a timeout.
+                                <strong>Map</strong> translates a WHOLE value — <code>true</code>
+                                to <code>Inward</code> — which is what a vocabulary needs;
+                                <code>Replace</code> substitutes a substring, so it also rewrites
+                                the token wherever it appears inside a longer value. A regex here
+                                runs against two million values per file, so it is bounded by a
+                                timeout.
                             </div>
                         </div>
 
@@ -1100,5 +1118,6 @@ else
 }
 
 @section Scripts {
+    <script src="~/js/transform-builder.js" asp-append-version="true"></script>
     <script src="~/js/datasets.js" asp-append-version="true"></script>
 }

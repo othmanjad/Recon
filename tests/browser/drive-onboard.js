@@ -119,11 +119,16 @@ function csvFor(date) {
             `${TAG}-0009,400,JOD,${date} 11:00:00,Inward,ACSC`,
             `${TAG}-0099,650,JOD,${date} 11:30:00,Inward,RJCT`,
         ].join("\n") + "\n",
+        /* The right side writes its direction as a boolean — true meaning
+           money in — which is what a real second counterparty does: the two
+           sides mean the same thing and spell it differently. A Map step on
+           the mapping is what makes them one vocabulary, and nothing
+           downstream ever learns that this file said "true". */
         right: [
             "ref,amount,ccy,value_date,dir",
-            `${TAG}-0001,1500,JOD,${date} 09:16:00,Inward`,
-            `${TAG}-0002,2750,JOD,${date} 10:31:00,Outward`,
-            `${TAG}-0007,900,JOD,${date} 12:00:00,Inward`,
+            `${TAG}-0001,1500,JOD,${date} 09:16:00,true`,
+            `${TAG}-0002,2750,JOD,${date} 10:31:00,false`,
+            `${TAG}-0007,900,JOD,${date} 12:00:00,true`,
         ].join("\n") + "\n",
     };
 }
@@ -254,15 +259,15 @@ function csvFor(date) {
         ["STMT_REF", "ref", ""],
         ["STMT_AMT", "amount", ""],
         ["STMT_CCY", "ccy", ""],
-        ["STMT_DIR", "dir", ""],
+        ["STMT_DIR", "dir", "", [["true", "Inward"], ["false", "Outward"]]],
     ];
 
     for (const [field, source, format] of leftMappings) {
         await addMapping(leftId, leftFormatId, field, source, format);
     }
 
-    for (const [field, source, format] of rightMappings) {
-        await addMapping(rightId, rightFormatId, field, source, format);
+    for (const [field, source, format, map] of rightMappings) {
+        await addMapping(rightId, rightFormatId, field, source, format, map);
     }
 
     await page.goto(`${BASE}/datasets?id=${leftId}&formatId=${leftFormatId}`, { waitUntil: "load" });
@@ -275,7 +280,8 @@ function csvFor(date) {
     await page.goto(`${BASE}/datasets?id=${leftId}&formatId=${leftFormatId}`, { waitUntil: "load" });
     await page.selectOption("#mapFieldCode", "REF");
     await page.fill("#sourcePath", "reference");
-    await page.fill("#transformChainJson", '[{"op":"NoSuchOperation"}]');
+    await page.locator("#txBuilder").locator("xpath=..").locator("details summary").first().click();
+    await page.fill("#txJsonRaw", '[{"op":"NoSuchOperation"}]');
     await submit(page, page.locator('form[action*="/Datasets/SaveMapping"] button[type="submit"]'), 60000);
 
     body = await page.locator("body").innerText();
@@ -682,6 +688,18 @@ function csvFor(date) {
     check(/Balanced/.test(body),
         `the matched totals did not agree, so the configuration is wrong somewhere: ${firstAlert(body)}`);
 
+    /* The vocabulary arrived as one. The right-hand file said "true" and
+       "false"; the aggregates are grouped by the Direction-role field, and
+       they say Inward and Outward on BOTH sides — the Map step on the
+       mapping is the only thing standing between those two facts. */
+    const groups = await page.locator("table.rc-table tbody tr").allInnerTexts();
+    const directions = groups.filter(t => t.includes("Direction="));
+
+    check(directions.some(t => t.includes(rightCode) && t.includes("Direction=Inward")),
+        `the right side's direction was not translated: ${directions.join(" | ") || "(no direction groups)"}`);
+    check(!directions.some(t => /Direction=(true|false)/i.test(t)),
+        `the file's own spelling reached the aggregates: ${directions.join(" | ")}`);
+
     await shot(page, "onboard-4-run");
 
     // The unmatched rows are now named by the classification rules, and the
@@ -979,13 +997,43 @@ function csvFor(date) {
             `the format for dataset ${datasetId} was not created: ${firstAlert(text)}`);
     }
 
-    async function addMapping(datasetId, formatId, fieldCode, source, parseFormat) {
+    async function addMapping(datasetId, formatId, fieldCode, source, parseFormat, map) {
         step("mapping " + fieldCode);
         await page.goto(`${BASE}/datasets?id=${datasetId}&formatId=${formatId}`, { waitUntil: "load" });
 
         await page.selectOption("#mapFieldCode", fieldCode);
         await page.fill("#sourcePath", source);
         await page.fill("#parseFormat", parseFormat);
+
+        /* A vocabulary, built from rows rather than typed as JSON: "if the
+           value is true, make it Inward". The chain used to be a text box
+           expecting [{"op":"Map","cases":[…]}], on the screen an operator
+           reaches before they have seen a rule at all. */
+        if (map) {
+            await page.click("#txBuilder .rc-tx-add");
+
+            for (let i = 0; i < map.length; i++) {
+                if (await page.locator("#txBuilder .rc-tx-pair").count() <= i) {
+                    await page.click("#txBuilder .rc-tx-pair-add");
+                }
+
+                const pair = page.locator("#txBuilder .rc-tx-pair").nth(i);
+                await pair.locator(".rc-tx-from").fill(map[i][0]);
+                await pair.locator(".rc-tx-to").fill(map[i][1]);
+            }
+
+            const built = await page.locator("#transformChainJson").inputValue();
+            check(built === JSON.stringify([{
+                op: "Map",
+                cases: map.map(([from, to]) => ({ from: from, to: to })),
+            }]), `the transform builder wrote the wrong chain: ${built}`);
+
+            // And it says what the chain would do to a value, before saving.
+            await page.fill("#txBuilder .rc-tx-sample", map[0][0]);
+            const shown = await page.locator("#txBuilder .rc-tx-preview").innerText();
+            check(shown.includes(map[0][0]) && shown.includes(map[0][1]),
+                `the preview does not show ${map[0][0]} becoming ${map[0][1]}: ${shown}`);
+        }
 
         await submit(page, page.locator('form[action*="/Datasets/SaveMapping"] button[type="submit"]'), 60000);
 

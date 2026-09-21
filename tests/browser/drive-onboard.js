@@ -364,41 +364,80 @@ function csvFor(date) {
     step("phase 5b: rule sets");
     await page.goto(`${BASE}/rules?id=${definitionId}`, { waitUntil: "load" });
 
-    // An exclusion whose condition names a field that is not in the registry
-    // must be refused — the same gate the passes get.
-    await page.fill("#exName", "Nonsense");
-    await page.fill("#exReason", "NOPE");
-    await page.fill("#exJson", '{"op":"and","items":[{"field":"NO_SUCH_FIELD","cmp":"eq","value":"x"}]}');
-    await submit(page, page.locator('form[action*="/Rules/SaveExclusion"] button[type="submit"]'), 60000);
-
-    body = await page.locator("body").innerText();
-    check(/exclusion condition was rejected/.test(body),
-        "an exclusion naming a field outside the registry was accepted");
-
-    // And the real one.
+    /* Built from dropdowns, which is the point: an operator configuring an
+       exclusion used to have to type
+       {"op":"and","items":[{"field":"STATUS","cmp":"eq","value":"RJCT"}]}
+       by hand, in a product whose claim is that they never write code. */
     await page.fill("#exName", "Rejected by the scheme");
     await page.fill("#exReason", "REJECTED");
-    await page.fill("#exJson", '{"op":"and","items":[{"field":"STATUS","cmp":"eq","value":"RJCT"}]}');
+    await buildCondition("ex", "STATUS", "eq", "RJCT");
+
+    const exJson = await page.locator("#exJson").evaluate(el => el.value);
+    check(exJson === '{"op":"and","items":[{"field":"STATUS","cmp":"eq","value":"RJCT"}]}',
+        `the builder wrote the wrong condition: ${exJson}`);
+
+    // And it says in words what it is about to save.
+    check(/STATUS يساوي RJCT/.test(await page.locator("#exBuilder").innerText()),
+        "the builder does not say in words what the condition means");
+
     await submit(page, page.locator('form[action*="/Rules/SaveExclusion"] button[type="submit"]'), 60000);
 
     body = await page.locator("body").innerText();
     check(/Exclusion 'Rejected by the scheme' saved/.test(body),
         `the exclusion was not saved: ${firstAlert(body)}`);
 
+    /* The builder cannot offer a field outside the registry — that is the
+       security boundary drawn as a dropdown. But the server's gate must still
+       hold for anything that does not come through it, so the advanced JSON
+       box is where that is proved. */
+    await page.goto(`${BASE}/rules?id=${definitionId}`, { waitUntil: "load" });
+
+    const offered = await page.locator("#exBuilder .rc-cb-field option")
+        .evaluateAll(options => options.map(o => o.value));
+
+    check(!offered.includes("NO_SUCH_FIELD"),
+        "the builder offered a field that is not in the registry");
+    check(offered.includes("STATUS"),
+        `the builder does not offer the left dataset's fields: ${offered.join(", ")}`);
+
+    await page.fill("#exName", "Nonsense");
+    await page.fill("#exReason", "NOPE");
+    await page.locator("#exBuilder").locator("xpath=..").locator("details summary").first().click();
+    await page.fill("#exJsonRaw",
+        '{"op":"and","items":[{"field":"NO_SUCH_FIELD","cmp":"eq","value":"x"}]}');
+
+    await submit(page, page.locator('form[action*="/Rules/SaveExclusion"] button[type="submit"]'), 60000);
+
+    body = await page.locator("body").innerText();
+    check(/exclusion condition was rejected/.test(body),
+        "an exclusion naming a field outside the registry was accepted");
+
     // A classification for each side, so the unmatched rows get names.
     await addClassification("MISSING_IN_STATEMENT", "In the ledger, not in the statement", "Left", 1,
-        '{"op":"and","items":[{"field":"REF","cmp":"isnotnull"}]}');
+        "REF", "isnotnull");
 
     await addClassification("MISSING_IN_LEDGER", "In the statement, not in the ledger", "Right", 2,
-        '{"op":"and","items":[{"field":"STMT_REF","cmp":"isnotnull"}]}');
+        "STMT_REF", "isnotnull");
 
-    // A "Both" rule whose condition only exists on one side must be refused:
-    // the two registries name nothing alike.
+    /* "Both" has to resolve against both registries, and these two name
+       nothing alike — so the builder offers only what they share, which here
+       is nothing. The server's refusal is proved through the JSON box. */
+    await page.goto(`${BASE}/rules?id=${definitionId}`, { waitUntil: "load" });
+    await page.selectOption("#clSide", "Both");
+
+    const shared = await page.locator("#clBuilder .rc-cb-field option")
+        .evaluateAll(options => options.map(o => o.value));
+
+    check(!shared.includes("REF") && !shared.includes("STMT_REF"),
+        `a Both-sided rule was offered one side's fields: ${shared.join(", ")}`);
+    check(/المشتركة بين الطرفين/.test(await page.locator("#rc-classification-form").innerText()),
+        "the screen does not explain why the Both field list is narrower");
+
     await page.fill("#clCode", "BOTH_SIDES");
     await page.fill("#clName", "Applies to both");
-    await page.selectOption("#clSide", "Both");
     await page.fill("#clSeq", "9");
-    await page.fill("#clJson", '{"op":"and","items":[{"field":"REF","cmp":"isnotnull"}]}');
+    await page.locator("#clBuilder").locator("xpath=..").locator("details summary").first().click();
+    await page.fill("#clJsonRaw", '{"op":"and","items":[{"field":"REF","cmp":"isnotnull"}]}');
     await submit(page, page.locator('form[action*="/Rules/SaveClassification"] button[type="submit"]'), 60000);
 
     body = await page.locator("body").innerText();
@@ -839,7 +878,21 @@ function csvFor(date) {
             `the mapping ${fieldCode} ← ${source} was not saved: ${firstAlert(text)}`);
     }
 
-    async function addClassification(code, label, side, sequence, json) {
+    /* Sets the last row of one of the two condition builders. The value box
+       is disabled for isnull/isnotnull, which take none — so it is only
+       filled when the operator has somewhere to put it. */
+    async function buildCondition(prefix, field, cmp, value) {
+        const row = `#${prefix}Builder .rc-cb-row:last-child`;
+
+        await page.selectOption(`${row} .rc-cb-field`, field);
+        await page.selectOption(`${row} .rc-cb-cmp`, cmp);
+
+        if (value !== undefined) {
+            await page.fill(`${row} .rc-cb-value`, value);
+        }
+    }
+
+    async function addClassification(code, label, side, sequence, field, cmp, value) {
         step("classification " + code);
         await page.goto(`${BASE}/rules?id=${definitionId}`, { waitUntil: "load" });
 
@@ -847,7 +900,7 @@ function csvFor(date) {
         await page.fill("#clName", label);
         await page.selectOption("#clSide", side);
         await page.fill("#clSeq", String(sequence));
-        await page.fill("#clJson", json);
+        await buildCondition("cl", field, cmp, value);
 
         await submit(page, page.locator('form[action*="/Rules/SaveClassification"] button[type="submit"]'), 60000);
 

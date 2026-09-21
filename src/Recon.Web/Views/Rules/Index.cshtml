@@ -168,7 +168,9 @@ else
                             aria-label="Match mode">
                         @foreach (var mode in Enum.GetNames<MatchMode>())
                         {
-                            <option value="@mode" selected="@(pass.Mode.ToString() == mode)">@mode</option>
+                            <option value="@mode" selected="@(pass.Mode.ToString() == mode)">
+                                @RuleWords.Mode(mode)
+                            </option>
                         }
                     </select>
 
@@ -177,7 +179,7 @@ else
                         @foreach (var choice in Enum.GetNames<OnMultipleMatch>())
                         {
                             <option value="@choice" selected="@(pass.OnMultipleMatch.ToString() == choice)">
-                                @choice
+                                @RuleWords.OnMultiple(choice)
                             </option>
                         }
                     </select>
@@ -314,10 +316,13 @@ else
 
             <div class="rc-pass-head">
                 <span class="rc-seq">+</span>
+                @* Both optional: the server derives a code and a name from
+                   the first condition when they are left blank, which is what
+                   anyone would have typed. One real user typed "True". *@
                 <input class="form-control form-control-sm rc-mono" name="ruleCode"
-                       placeholder="PASS_CODE" style="width:190px" required aria-label="Rule code">
-                <input class="form-control form-control-sm" name="name" placeholder="What it matches"
-                       style="width:260px" required aria-label="Pass name">
+                       placeholder="الكود (تلقائي)" style="width:190px" aria-label="Rule code">
+                <input class="form-control form-control-sm" name="name"
+                       placeholder="الوصف (تلقائي)" style="width:260px" aria-label="Pass name">
                 <input class="form-control form-control-sm" type="number" name="sequence"
                        value="@(definition.Rules.Count == 0 ? 1 : definition.Rules.Max(r => r.Sequence) + 1)"
                        style="width:80px" required aria-label="Sequence">
@@ -325,14 +330,14 @@ else
                         aria-label="Match mode">
                     @foreach (var mode in Enum.GetNames<MatchMode>())
                     {
-                        <option value="@mode">@mode</option>
+                        <option value="@mode">@RuleWords.Mode(mode)</option>
                     }
                 </select>
                 <select class="form-select form-select-sm" name="onMultipleMatch" style="width:auto"
                         aria-label="On multiple match">
                     @foreach (var choice in Enum.GetNames<OnMultipleMatch>())
                     {
-                        <option value="@choice">@choice</option>
+                        <option value="@choice">@RuleWords.OnMultiple(choice)</option>
                     }
                 </select>
                 <div class="ms-auto">
@@ -452,11 +457,24 @@ else
                         <input class="form-control form-control-sm rc-mono" id="exReason"
                                name="reasonCode" required placeholder="REJECTED">
                     </div>
-                    <div class="col-md-4">
-                        <label class="form-label" for="exJson">Condition</label>
-                        <input class="form-control form-control-sm rc-mono" id="exJson"
-                               name="conditionJson" required
-                               placeholder='{"op":"and","items":[{"field":"STATUS","cmp":"eq","value":"RJCT"}]}'>
+                    <div class="col-12">
+                        <label class="form-label">الشرط · Condition</label>
+                        <div id="exBuilder"></div>
+                        <input type="hidden" id="exJson" name="conditionJson">
+
+                        @* The JSON is still reachable: a rule that needs a
+                           nested group is rarer than one that does not, and
+                           hiding the schema entirely would make it
+                           unreachable rather than simple. *@
+                        <details class="mt-2">
+                            <summary class="rc-help">تعديل الشرط كـ JSON · advanced</summary>
+                            <input class="form-control form-control-sm rc-mono mt-2" id="exJsonRaw"
+                                   aria-label="Condition JSON"
+                                   placeholder='{"op":"and","items":[{"field":"STATUS","cmp":"eq","value":"RJCT"}]}'>
+                            <div class="form-text">
+                                يُطبَّق عند الحفظ ويستبدل ما بُني أعلاه.
+                            </div>
+                        </details>
                     </div>
                     <div class="col-md-1 d-flex align-items-end">
                         <div class="form-check">
@@ -629,10 +647,19 @@ else
                         </div>
                     </div>
                     <div class="col-12">
-                        <label class="form-label" for="clJson">Condition</label>
-                        <input class="form-control form-control-sm rc-mono" id="clJson"
-                               name="conditionJson" required
-                               placeholder='{"op":"and","items":[{"field":"DIRECTION","cmp":"eq","value":"Inward"}]}'>
+                        <label class="form-label">الشرط · Condition</label>
+                        <div id="clBuilder"></div>
+                        <input type="hidden" id="clJson" name="conditionJson">
+
+                        <details class="mt-2">
+                            <summary class="rc-help">تعديل الشرط كـ JSON · advanced</summary>
+                            <input class="form-control form-control-sm rc-mono mt-2" id="clJsonRaw"
+                                   aria-label="Condition JSON"
+                                   placeholder='{"op":"and","items":[{"field":"DIRECTION","cmp":"eq","value":"Inward"}]}'>
+                            <div class="form-text">
+                                يُطبَّق عند الحفظ ويستبدل ما بُني أعلاه.
+                            </div>
+                        </details>
                         @*
                             A rule for both sides has to resolve against both
                             registries, and the two sides name nothing alike.
@@ -995,11 +1022,22 @@ else
                 right: { code: @Json.Serialize(definition.Right.Code), fields: @Json.Serialize(Fields(definition.Right)) },
                 comparisons: @Json.Serialize(Enum.GetNames<ComparisonType>()),
                 units: @Json.Serialize(Enum.GetNames<ToleranceUnit>()),
+
+                // The same words the server-rendered pickers use, handed to
+                // the client so the condition rows it builds cannot drift
+                // into a second vocabulary.
+                words: {
+                    comparisons: @Json.Serialize(Enum.GetNames<ComparisonType>()
+                        .ToDictionary(c => c, RuleWords.Comparison)),
+                    units: @Json.Serialize(Enum.GetNames<ToleranceUnit>()
+                        .ToDictionary(u => u, RuleWords.Unit))
+                },
                 validateUrl: "@Url.Action("ValidateFilter")",
                 token: "@Xsrf.GetAndStoreTokens(Context).RequestToken"
             };
         </script>
         <script src="~/js/condition-tree.js"></script>
+        <script src="~/js/condition-builder.js"></script>
         <script src="~/js/rule-builder.js"></script>
     }
 }

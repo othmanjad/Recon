@@ -661,8 +661,8 @@ public sealed class RulesController(
     public async Task<IActionResult> SavePass(
         int definitionId,
         int? matchRuleId,
-        string ruleCode,
-        string name,
+        string? ruleCode,
+        string? name,
         int sequence,
         string matchMode,
         string onMultipleMatch,
@@ -707,6 +707,38 @@ public sealed class RulesController(
                 "against every row.";
 
             return RedirectToAction(nameof(Index), new { id = definitionId });
+        }
+
+        /* An operator should not have to invent an internal code. Left blank
+           it is derived from the pass number and the first field it matches
+           on — P1_REF_PRIMARY — which is what somebody would have typed
+           anyway, and reads the same on the run page and in the stored SQL.
+           One real user typed "True" into that box, which is the cost of
+           asking a question nobody outside the database needs answered. */
+        if (string.IsNullOrWhiteSpace(ruleCode))
+        {
+            var basis = conditions[0].LeftFieldCode;
+
+            var derived = $"P{sequence}_{basis}".ToUpperInvariant();
+            var taken = definition.Rules
+                .Where(r => r.MatchRuleId != matchRuleId)
+                .Select(r => r.RuleCode)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            var candidate = derived;
+            for (var n = 2; taken.Contains(candidate); n++)
+            {
+                candidate = $"{derived}_{n}";
+            }
+
+            ruleCode = candidate;
+        }
+
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            name = conditions.Count == 1
+                ? $"{conditions[0].LeftFieldCode} ↔ {conditions[0].RightFieldCode}"
+                : $"{conditions.Count} conditions on {conditions[0].LeftFieldCode}";
         }
 
         try
@@ -966,6 +998,11 @@ public sealed class RulesController(
             {
                 LeftFieldId = left.DatasetFieldId,
                 RightFieldId = right.DatasetFieldId,
+
+                // Carried alongside the ids so a derived code and name can
+                // name the fields the pass actually matches on.
+                LeftFieldCode = left.FieldCode,
+                RightFieldCode = right.FieldCode,
                 Comparison = comparison,
                 Tolerance = tolerance,
                 Unit = unit,
@@ -980,6 +1017,8 @@ public sealed class RulesController(
     {
         public required int LeftFieldId { get; init; }
         public required int RightFieldId { get; init; }
+        public required string LeftFieldCode { get; init; }
+        public required string RightFieldCode { get; init; }
         public required string Comparison { get; init; }
         public long? Tolerance { get; init; }
         public string? Unit { get; init; }

@@ -47,18 +47,26 @@ jQuery(function ($) {
         return html;
     }
 
+    /* The server's own wording for these two, handed over in config.words:
+       a screen that shows an operator "MinorUnit" is a screen that assumes
+       they read the schema. */
+    function word(kind, value) {
+        var table = (config.words && config.words[kind]) || {};
+        return table[value] || value;
+    }
+
     function comparisonOptions() {
         var html = "";
         $.each(config.comparisons, function (_, c) {
-            html += "<option value=\"" + c + "\">" + c + "</option>";
+            html += '<option value="' + c + '">' + word("comparisons", c) + "</option>";
         });
         return html;
     }
 
     function unitOptions() {
-        var html = '<option value="">(unit)</option>';
+        var html = '<option value="">— الوحدة —</option>';
         $.each(config.units, function (_, u) {
-            html += "<option value=\"" + u + "\">" + u + "</option>";
+            html += '<option value="' + u + '">' + word("units", u) + "</option>";
         });
         return html;
     }
@@ -91,6 +99,13 @@ jQuery(function ($) {
         var normalized = $row.find(".rc-norm").val() === "true";
         var tolerance = $row.find(".rc-tol").val();
         var unit = $row.find(".rc-unit").val();
+
+        // The tolerance pair is only meaningful for two comparisons, so it
+        // is only offered for those two: a box that accepts what the
+        // comparison ignores is a box that invites a wrong answer.
+        var needsTolerance = NEEDS_TOLERANCE[comparison] === true;
+        $row.find(".rc-tol, .rc-unit").prop("disabled", !needsTolerance);
+        $row.find(".rc-tol").attr("placeholder", needsTolerance ? "الفارق" : "—");
 
         var notes = [];
         var warn = false;
@@ -272,21 +287,99 @@ jQuery(function ($) {
     /* ---- the three rule sets ---------------------------------------
        Loading a row into its form rather than making the operator retype
        a condition tree they can see on the screen above. */
+    /* The two rule sets are configured by dropdowns now, not by typing a
+       condition tree. ReconConditions writes the same JSON into the same
+       hidden input, so the validator and the compiler see what they always
+       saw. */
+    var exclusionFields = function () {
+        var dataset = $("#exDataset").val();
+        return dataset === config.right.code ? config.right.fields : config.left.fields;
+    };
+
+    var exBuilder = window.ReconConditions && window.ReconConditions.attach({
+        container: "#exBuilder",
+        hidden: "#exJson",
+        fields: exclusionFields()
+    });
+
+    if (exBuilder) {
+        // An exclusion belongs to ONE dataset, so its field list follows the
+        // dataset picker: offering the other side's names would offer a
+        // condition the server must refuse.
+        $("#exDataset").on("change", function () {
+            exBuilder.fields(exclusionFields());
+        });
+
+        // The advanced box wins when it has something in it, because somebody
+        // who opened it did so on purpose.
+        $("#rc-exclusion-form").on("submit", function () {
+            var raw = $.trim($("#exJsonRaw").val() || "");
+            if (raw.length) { $("#exJson").val(raw); }
+        });
+    }
+
     $(".rc-exclusion-edit").on("click", function () {
         var $b = $(this);
 
         $("#exclusionRuleId").val($b.data("id"));
         $("#exDataset").val($b.data("dataset"));
         $("#exName").val($b.data("name"));
-        $("#exJson").val($b.data("json"));
         $("#exReason").val($b.data("reason"));
         $("#exActive").prop("checked", $b.data("active") === true || $b.data("active") === "true");
+
+        if (exBuilder) {
+            exBuilder.fields(exclusionFields());
+            exBuilder.load($b.data("json"));
+        }
+
+        $("#exJsonRaw").val("");
     });
 
     $("#rc-exclusion-reset").on("click", function () {
         $("#rc-exclusion-form")[0].reset();
         $("#exclusionRuleId").val("");
     });
+
+    /* A classification names a side, and "Both" has to resolve against both
+       registries — so its field list is the INTERSECTION by code, which is
+       the only set a both-sided condition can be evaluated on. */
+    function classificationFields() {
+        var side = $("#clSide").val();
+
+        if (side === "Left") { return config.left.fields; }
+        if (side === "Right") { return config.right.fields; }
+
+        var rightCodes = {};
+        $.each(config.right.fields, function (_, f) { rightCodes[f.code] = true; });
+
+        return $.grep(config.left.fields, function (f) { return rightCodes[f.code] === true; });
+    }
+
+    var clBuilder = window.ReconConditions && window.ReconConditions.attach({
+        container: "#clBuilder",
+        hidden: "#clJson",
+        fields: classificationFields()
+    });
+
+    if (clBuilder) {
+        $("#clSide").on("change", function () {
+            clBuilder.fields(classificationFields());
+
+            var side = $("#clSide").val();
+            $("#clBuilder").siblings(".rc-cb-side-note").remove();
+
+            if (side === "Both") {
+                $("#clBuilder").after('<div class="rc-help rc-cb-side-note mt-1">'
+                    + 'الحقول المعروضة هي المشتركة بين الطرفين بالكود — '
+                    + 'شرط على أسماء الطرف الأيسر لا يستطيع الأيمن تقييمه.</div>');
+            }
+        });
+
+        $("#rc-classification-form").on("submit", function () {
+            var raw = $.trim($("#clJsonRaw").val() || "");
+            if (raw.length) { $("#clJson").val(raw); }
+        });
+    }
 
     $(".rc-classification-edit").on("click", function () {
         var $b = $(this);
@@ -295,11 +388,17 @@ jQuery(function ($) {
         $("#clCode").val($b.data("code"));
         $("#clName").val($b.data("label"));
         $("#clSide").val($b.data("side"));
-        $("#clJson").val($b.data("json"));
         $("#clAction").val($b.data("action"));
         $("#clSeverity").val($b.data("severity"));
         $("#clSeq").val($b.data("seq"));
         $("#clActive").prop("checked", $b.data("active") === true || $b.data("active") === "true");
+
+        if (clBuilder) {
+            clBuilder.fields(classificationFields());
+            clBuilder.load($b.data("json"));
+        }
+
+        $("#clJsonRaw").val("");
     });
 
     $("#rc-classification-reset").on("click", function () {

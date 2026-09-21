@@ -617,12 +617,13 @@ else
                         <input class="form-control form-control-sm" id="clName" name="displayName"
                                required placeholder="In the statement, not in the ledger">
                     </div>
-                    <div class="col-md-1">
+                    <div class="col-md-2">
                         <label class="form-label" for="clSide">Side</label>
                         <select class="form-select form-select-sm" id="clSide" name="appliesToSide">
-                            <option value="Left">Left</option>
-                            <option value="Right">Right</option>
-                            <option value="Both">Both</option>
+                            @foreach (var side in new[] { "Left", "Right", "Both" })
+                            {
+                                <option value="@side">@RuleWords.Side(side)</option>
+                            }
                         </select>
                     </div>
                     <div class="col-md-1">

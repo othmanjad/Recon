@@ -458,27 +458,93 @@ function csvFor(date) {
 
     await page.selectOption("#clSide", "Both");
 
+    /* Saving with no condition is refused twice, and both matter. The browser
+       refuses it on the spot, because a round trip to be told what the screen
+       already knew costs the person the form they had filled in. */
     await page.fill("#clCode", "NO_CONDITION");
     await page.fill("#clName", "Saved with nothing to match on");
     await page.fill("#clSeq", "8");
-    await submit(page, page.locator('form[action*="/Rules/SaveClassification"] button[type="submit"]'), 60000);
+    await page.click('form[action*="/Rules/SaveClassification"] button[type="submit"]');
+    await page.waitForTimeout(400);
 
+    check(await page.locator("#clBuilder .rc-cb-blocked").count() === 1,
+        "the browser submitted a classification with no condition");
+    check(await page.locator("#clCode").inputValue() === "NO_CONDITION",
+        "the blocked submit lost what had already been typed");
+
+    // And the server, through a POST the browser's rule never sees — which is
+    // the one that counts: the column is NOT NULL, and without this gate the
+    // DATABASE answered with "Cannot insert the value NULL into column
+    // 'ConditionJson'" after the form was gone.
+    const clToken = await page
+        .locator('form[action*="/Rules/SaveClassification"] input[name="__RequestVerificationToken"]')
+        .getAttribute("value");
+
+    const clRefused = await context.request.post(`${BASE}/Rules/SaveClassification`, {
+        form: {
+            __RequestVerificationToken: clToken ?? "",
+            definitionId: String(definitionId),
+            exceptionCode: "NO_CONDITION",
+            displayName: "Saved with nothing to match on",
+            appliesToSide: "Left",
+            conditionJson: "",
+            actionType: "ReportOnly",
+            severity: "Normal",
+            sequence: "8",
+            isActive: "true",
+        },
+        maxRedirects: 0,
+    });
+
+    check(clRefused.status() === 302,
+        `a crafted POST answered ${clRefused.status()} rather than redirecting with a message`);
+
+    await page.goto(`${BASE}/rules?id=${definitionId}`, { waitUntil: "load" });
     body = await page.locator("body").innerText();
+
     check(/A classification needs a condition/.test(body),
-        `a classification with no condition was not refused by the screen: ${firstAlert(body)}`);
+        `the server accepted a classification with no condition: ${firstAlert(body)}`);
     check(!/Cannot insert the value NULL/.test(body),
         "the database answered a blank condition instead of the screen");
+    check(!/NO_CONDITION/.test(body), "the refused classification was stored anyway");
 
-    // The same hole on the exclusion form, reached by emptying the builder.
-    await page.goto(`${BASE}/rules?id=${definitionId}`, { waitUntil: "load" });
+    // The same two gates on the exclusion form.
     await page.fill("#exName", "No condition either");
     await page.fill("#exReason", "NONE");
     await page.locator("#exBuilder .rc-cb-row").evaluateAll(rows => rows.forEach(r => r.remove()));
-    await submit(page, page.locator('form[action*="/Rules/SaveExclusion"] button[type="submit"]'), 60000);
+    await page.click('form[action*="/Rules/SaveExclusion"] button[type="submit"]');
+    await page.waitForTimeout(400);
 
+    check(await page.locator("#exBuilder .rc-cb-blocked").count() === 1,
+        "the browser submitted an exclusion with no condition");
+
+    const leftDatasetId = await page.locator("#exDataset option").first().getAttribute("value");
+
+    const exToken = await page
+        .locator('form[action*="/Rules/SaveExclusion"] input[name="__RequestVerificationToken"]')
+        .getAttribute("value");
+
+    const exRefused = await context.request.post(`${BASE}/Rules/SaveExclusion`, {
+        form: {
+            __RequestVerificationToken: exToken ?? "",
+            definitionId: String(definitionId),
+            datasetId: String(leftDatasetId),
+            name: "No condition either",
+            reasonCode: "NONE",
+            conditionJson: "",
+            isActive: "true",
+        },
+        maxRedirects: 0,
+    });
+
+    check(exRefused.status() === 302,
+        `a crafted POST answered ${exRefused.status()} rather than redirecting with a message`);
+
+    await page.goto(`${BASE}/rules?id=${definitionId}`, { waitUntil: "load" });
     body = await page.locator("body").innerText();
+
     check(/An exclusion needs a condition/.test(body),
-        `an exclusion with no condition was not refused by the screen: ${firstAlert(body)}`);
+        `the server accepted an exclusion with no condition: ${firstAlert(body)}`);
 
     await page.goto(`${BASE}/rules?id=${definitionId}`, { waitUntil: "load" });
     await page.selectOption("#clSide", "Both");

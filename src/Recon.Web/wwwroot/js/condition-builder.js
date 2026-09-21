@@ -116,6 +116,7 @@ window.ReconConditions = (function ($) {
             // grey aside beside a button nobody read it.
             + '<div class="alert alert-light border mt-2 mb-0 py-2 px-3 small" dir="rtl">'
             + '  <strong>ما سيُحفَظ:</strong> <span class="rc-cb-preview"></span>'
+            + '  <span class="rc-cb-count rc-help d-block mt-1"></span>'
             + '</div>');
 
         var $rows = $host.find(".rc-cb-rows");
@@ -203,14 +204,27 @@ window.ReconConditions = (function ($) {
             }).join(joiner);
         }
 
+        /* The advanced box, when the caller has one. Somebody who opened it
+           and typed in it did so on purpose, so it wins — and it wins HERE,
+           in the one place that decides what gets posted, rather than in a
+           second submit handler that has to out-order this one. */
+        function advanced() {
+            return options.advanced ? $.trim($(options.advanced).val() || "") : "";
+        }
+
         function publish() {
             var built = tree();
+            var raw = advanced();
 
             // An empty builder writes an empty string rather than a tree with
             // no items: the server requires a condition, and "{}" would pass
             // that check while meaning nothing.
-            $hidden.val(built.items.length ? JSON.stringify(built) : "");
-            $host.find(".rc-cb-preview").text(sentence(built));
+            $hidden.val(raw || (built.items.length ? JSON.stringify(built) : ""));
+            $host.find(".rc-cb-preview").text(
+                raw ? "الشرط المكتوب في صندوق JSON المتقدّم (يستبدل ما بُني أعلاه)"
+                    : sentence(built));
+            $host.find(".rc-cb-count").text(
+                "الحقول المتاحة لهذا الشرط: " + offered(fields).length);
         }
 
         api.publish = publish;
@@ -325,9 +339,43 @@ window.ReconConditions = (function ($) {
         // empty string.
         $host.on("change input keyup", ".rc-cb-field, .rc-cb-value, .rc-cb-op", publish);
 
+        if (options.advanced) { $(options.advanced).on("change input keyup", publish); }
+
         // And once more as the form is submitted, so a value typed and sent
-        // with the Enter key cannot outrun the keyup handler.
-        $hidden.closest("form").on("submit", publish);
+        // with the Enter key cannot outrun the keyup handler. A submit with
+        // no condition at all is stopped here: the server refuses it anyway,
+        // and the refusal costs the person everything else they had typed.
+        $hidden.closest("form").on("submit", function (e) {
+            publish();
+
+            if ($hidden.val()) { return; }
+
+            e.preventDefault();
+
+            // Give them the row the message is about to point at: if the
+            // fields are there, the only thing missing is somewhere to pick
+            // them, and a message naming a row that is not on screen is a
+            // message that cannot be followed.
+            if (offered(fields).length && !$rows.find(".rc-cb-row").length) {
+                var $fresh = row();
+                $rows.append($fresh);
+                syncRow($fresh);
+            }
+
+            $host.find(".rc-cb-blocked").remove();
+            $host.append('<div class="alert alert-danger py-2 px-3 mt-2 mb-0 small rc-cb-blocked"'
+                + ' dir="rtl" role="alert">لم يُحفَظ: القاعدة تحتاج شرطاً واحداً على الأقل.'
+                + ' ' + (offered(fields).length === 0
+                    ? 'ولا حقل متاح هنا — اقرأ السبب أعلاه.'
+                    : 'اختر حقلاً ومقارنة من الصف أعلاه.') + '</div>');
+
+            $host[0].scrollIntoView({ block: "center" });
+        });
+
+        // The refusal clears itself as soon as the builder has something.
+        $host.on("change input", function () {
+            if ($hidden.val()) { $host.find(".rc-cb-blocked").remove(); }
+        });
 
         api.load($hidden.val());
         return api;

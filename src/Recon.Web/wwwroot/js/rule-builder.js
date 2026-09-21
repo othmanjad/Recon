@@ -314,10 +314,6 @@ jQuery(function ($) {
        no field at all, a registry whose fields are all withheld from
        matching, and a Both-sided rule whose two registries share no field
        code. Each has a different way out, so each says its own. */
-    function sideOf(code) {
-        return code === config.right.code ? config.right : config.left;
-    }
-
     function datasetsLink(side) {
         return '<a href="' + config.datasetsUrl + '?id=' + side.id + '">'
             + 'افتح سجل حقول ' + side.code + '</a>';
@@ -369,16 +365,24 @@ jQuery(function ($) {
             + ' data-side="Right">قاعدة للطرف الأيمن</button>';
     }
 
+    /* The picker's option values are DatasetIds. Comparing one to a CODE is
+       always false, so an exclusion on the right dataset was offered the
+       left's field names and the server refused it as "not in the field
+       registry" — which is true, and unhelpful. */
+    function sideOfDataset(datasetId) {
+        return parseInt(datasetId, 10) === config.right.id ? config.right : config.left;
+    }
+
     var exclusionFields = function () {
-        var dataset = $("#exDataset").val();
-        return dataset === config.right.code ? config.right.fields : config.left.fields;
+        return sideOfDataset($("#exDataset").val()).fields;
     };
 
     var exBuilder = window.ReconConditions && window.ReconConditions.attach({
         container: "#exBuilder",
         hidden: "#exJson",
         fields: exclusionFields(),
-        nothing: function () { return explainOneSide(sideOf($("#exDataset").val())); }
+        advanced: "#exJsonRaw",
+        nothing: function () { return explainOneSide(sideOfDataset($("#exDataset").val())); }
     });
 
     if (exBuilder) {
@@ -389,12 +393,6 @@ jQuery(function ($) {
             exBuilder.fields(exclusionFields());
         });
 
-        // The advanced box wins when it has something in it, because somebody
-        // who opened it did so on purpose.
-        $("#rc-exclusion-form").on("submit", function () {
-            var raw = $.trim($("#exJsonRaw").val() || "");
-            if (raw.length) { $("#exJson").val(raw); }
-        });
     }
 
     $(".rc-exclusion-edit").on("click", function () {
@@ -438,6 +436,7 @@ jQuery(function ($) {
         container: "#clBuilder",
         hidden: "#clJson",
         fields: classificationFields(),
+        advanced: "#clJsonRaw",
         nothing: explainClassification
     });
 
@@ -461,10 +460,6 @@ jQuery(function ($) {
             }
         });
 
-        $("#rc-classification-form").on("submit", function () {
-            var raw = $.trim($("#clJsonRaw").val() || "");
-            if (raw.length) { $("#clJson").val(raw); }
-        });
     }
 
     $(".rc-classification-edit").on("click", function () {

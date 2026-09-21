@@ -223,6 +223,21 @@ async function shot(page, name) {
     let result = await omar.locator("#ct-result").innerText();
     check(/Rejected/.test(result), `a withheld field was not rejected (got "${result}")`);
 
+    /* A filter built from the dropdowns, not typed: the card's box is the
+       JSON the server is handed, and the builder is what fills it. */
+    await omar.selectOption("#ftBuilder .rc-cb-row:last-child .rc-cb-field", "REF_PRIMARY");
+    await omar.selectOption("#ftBuilder .rc-cb-row:last-child .rc-cb-cmp", "isnotnull");
+    const builtFilter = await omar.locator("#ct-json").evaluate(el => el.value);
+    check(builtFilter === '{"op":"and","items":[{"field":"REF_PRIMARY","cmp":"isnotnull"}]}',
+        `the filter builder wrote the wrong JSON: ${builtFilter}`);
+
+    await omar.click("#btn-validate");
+    await omar.waitForResponse(r => r.url().includes("ValidateFilter"), { timeout: 5000 });
+    await omar.waitForTimeout(300);
+    result = await omar.locator("#ct-result").innerText();
+    check(/Accepted/.test(result),
+        `a filter built from the dropdowns was not accepted (got "${result}")`);
+
     // A valid filter, validated by the server.
     await omar.click("#btn-sample-ok");
     await omar.click("#btn-validate");

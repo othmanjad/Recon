@@ -79,7 +79,7 @@ window.ReconConditions = (function ($) {
         var fields = options.fields || [];
 
         $host.addClass("rc-cb").html(
-            '<div class="rc-cb-head d-flex align-items-center gap-2 flex-wrap mb-2">'
+            '<div class="rc-cb-head d-flex align-items-center gap-2 flex-wrap mb-2" dir="rtl">'
             + '  <span class="rc-help">يتحقق الشرط عندما</span>'
             + '  <select class="form-select form-select-sm rc-cb-op" style="width:auto">'
             + '    <option value="and">كل الشروط التالية · ALL</option>'
@@ -91,7 +91,12 @@ window.ReconConditions = (function ($) {
             + '<div class="d-flex align-items-center gap-2 mt-2 flex-wrap">'
             + '  <button class="btn btn-sm btn-outline-primary rc-cb-add" type="button">'
             + '    <i class="bi bi-plus-lg" aria-hidden="true"></i> أضف شرطاً</button>'
-            + '  <span class="rc-cb-preview rc-help rc-mono"></span>'
+            + '</div>'
+            // The sentence gets a line of its own, labelled. It is the one
+            // thing on the form that says what is about to be saved, and as a
+            // grey aside beside a button nobody read it.
+            + '<div class="alert alert-light border mt-2 mb-0 py-2 px-3 small" dir="rtl">'
+            + '  <strong>ما سيُحفَظ:</strong> <span class="rc-cb-preview"></span>'
             + '</div>');
 
         var $rows = $host.find(".rc-cb-rows");
@@ -100,9 +105,9 @@ window.ReconConditions = (function ($) {
             leaf = leaf || {};
             var $row = $(
                 '<div class="rc-cb-row row g-2 align-items-center">'
-                + '  <div class="col-md-5"><select class="form-select form-select-sm rc-cb-field"'
+                + '  <div class="col-md-4"><select class="form-select form-select-sm rc-cb-field"'
                 + '      aria-label="الحقل">' + fieldOptions(fields, leaf.field) + '</select></div>'
-                + '  <div class="col-md-3"><select class="form-select form-select-sm rc-cb-cmp"'
+                + '  <div class="col-md-4"><select class="form-select form-select-sm rc-cb-cmp"'
                 + '      aria-label="المقارنة">' + operatorOptions(leaf.cmp) + '</select></div>'
                 + '  <div class="col-md-3"><input class="form-control form-control-sm rc-cb-value"'
                 + '      aria-label="القيمة"></div>'

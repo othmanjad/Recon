@@ -71,20 +71,27 @@ jQuery(function ($) {
         return html;
     }
 
+    /* The same five columns as a saved condition, in the same order and the
+       same widths — an editor whose new row is laid out differently from the
+       rows above it reads as two different screens. */
     function row() {
         return $(
             '<div class="rc-cond-row">' +
             '  <div class="row g-2 align-items-center">' +
             '    <div class="col-md-3"><select class="form-select form-select-sm rc-left" name="leftFieldCodes" aria-label="Left field">' + options(config.left.fields) + '</select></div>' +
-            '    <div class="col-md-2"><select class="form-select form-select-sm rc-cmp" name="comparisons" aria-label="Comparison">' + comparisonOptions() + '</select></div>' +
+            '    <div class="col-md-3"><select class="form-select form-select-sm rc-cmp" name="comparisons" aria-label="Comparison">' + comparisonOptions() + '</select></div>' +
             '    <div class="col-md-3"><select class="form-select form-select-sm rc-right" name="rightFieldCodes" aria-label="Right field">' + options(config.right.fields) + '</select></div>' +
             '    <div class="col-md-1"><input class="form-control form-control-sm rc-tol" type="number" name="tolerances" placeholder="tol" aria-label="Tolerance"></div>' +
             '    <div class="col-md-2"><select class="form-select form-select-sm rc-unit" name="toleranceUnits" aria-label="Tolerance unit">' + unitOptions() + '</select></div>' +
-            '    <div class="col-md-1"><select class="form-select form-select-sm rc-norm" name="useNormalized" aria-label="Compare normalized companions">' +
-            '      <option value="false">raw</option><option value="true">norm</option></select></div>' +
+            '  </div>' +
+            '  <div class="d-flex align-items-center gap-2 mt-1 flex-wrap" dir="rtl">' +
+            '    <span class="rc-help">تُقارن القيم:</span>' +
+            '    <select class="form-select form-select-sm rc-norm" name="useNormalized" style="width:auto" aria-label="Compare normalized companions">' +
+            '      <option value="false">كما وردت · raw</option>' +
+            '      <option value="true">بعد التوحيد · normalized</option></select>' +
+            '    <button class="btn btn-sm btn-link text-danger p-0 rc-remove-cond" type="button">حذف الشرط</button>' +
             '  </div>' +
             '  <div class="rc-help mt-1 rc-cond-note"></div>' +
-            '  <div class="mt-1"><button class="btn btn-sm btn-link text-danger p-0 rc-remove-cond" type="button">remove</button></div>' +
             '</div>');
     }
 
@@ -221,6 +228,17 @@ jQuery(function ($) {
             }]
         };
     }());
+
+    /* The filter card's own builder. It writes into the same textarea the
+       validator reads, so the card keeps showing exactly what the server is
+       handed while nobody has to type it. The examples still write the box
+       directly: the rejected one names a field the registry withholds, which
+       a builder cannot draw at all — and that is the lesson of the card. */
+    if (window.ReconConditions) { window.ReconConditions.attach({
+        container: "#ftBuilder",
+        hidden: "#ct-json",
+        fields: config.left.fields
+    }); }
 
     $("#btn-sample-ok").on("click", function () {
         $("#ct-json").val(VALID_EXAMPLE ? JSON.stringify(VALID_EXAMPLE, null, 2) : "{}");

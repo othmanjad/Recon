@@ -223,14 +223,19 @@ else
                                         }
                                     </select>
                                 </div>
-                                <div class="col-md-2">
+                                <div class="col-md-3">
+                                    @* In words, and wide enough to read them:
+                                       a saved condition used to show the C#
+                                       name of its comparison, which is the one
+                                       thing the person editing it cannot look
+                                       up. *@
                                     <select class="form-select form-select-sm rc-cmp" name="comparisons"
                                             aria-label="Comparison">
                                         @foreach (var comparison in Enum.GetNames<ComparisonType>())
                                         {
                                             <option value="@comparison"
                                                     selected="@(condition.Comparison.ToString() == comparison)">
-                                                @comparison
+                                                @RuleWords.Comparison(comparison)
                                             </option>
                                         }
                                     </select>
@@ -258,32 +263,37 @@ else
                                 <div class="col-md-2">
                                     <select class="form-select form-select-sm rc-unit" name="toleranceUnits"
                                             aria-label="Tolerance unit">
-                                        <option value="">(unit)</option>
+                                        <option value="">— الوحدة —</option>
                                         @foreach (var unit in Enum.GetNames<ToleranceUnit>())
                                         {
                                             <option value="@unit"
                                                     selected="@(condition.ToleranceUnit?.ToString() == unit)">
-                                                @unit
+                                                @RuleWords.Unit(unit)
                                             </option>
                                         }
                                     </select>
                                 </div>
-                                <div class="col-md-1">
-                                    @*
-                                        A select rather than a checkbox: every
-                                        condition must contribute exactly one
-                                        value to each array, or the arrays stop
-                                        lining up and a tolerance lands on the
-                                        wrong condition.
-                                    *@
-                                    <select class="form-select form-select-sm rc-norm" name="useNormalized"
-                                            aria-label="Compare normalized companions">
-                                        <option value="false" selected="@(!condition.UseNormalized)">raw</option>
-                                        <option value="true" selected="@condition.UseNormalized">norm</option>
-                                    </select>
-                                </div>
                             </div>
-                            <div class="rc-help mt-1 rc-cond-note"></div>
+                            <div class="d-flex align-items-center gap-2 mt-1 flex-wrap" dir="rtl">
+                                <span class="rc-help">تُقارن القيم:</span>
+                                @*
+                                    A select rather than a checkbox: every
+                                    condition must contribute exactly one
+                                    value to each array, or the arrays stop
+                                    lining up and a tolerance lands on the
+                                    wrong condition.
+                                *@
+                                <select class="form-select form-select-sm rc-norm" name="useNormalized"
+                                        style="width:auto" aria-label="Compare normalized companions">
+                                    <option value="false" selected="@(!condition.UseNormalized)">
+                                        كما وردت · raw
+                                    </option>
+                                    <option value="true" selected="@condition.UseNormalized">
+                                        بعد التوحيد · normalized
+                                    </option>
+                                </select>
+                                <span class="rc-help rc-cond-note"></span>
+                            </div>
                         </div>
                     }
                 </div>
@@ -931,8 +941,20 @@ else
                         unknown code, or one the registry does not mark matchable, is rejected here
                         and never reaches the compiler.
                     </p>
-                    <label class="form-label" for="ct-json">Filter JSON</label>
-                    <textarea class="form-control rc-mono" id="ct-json" rows="9" spellcheck="false"></textarea>
+                    @* Built from dropdowns like the rest of the screen. The box
+                       below is still here because this card's whole subject is
+                       the JSON the server is handed — but nobody has to type
+                       it to use the card. *@
+                    <div id="ftBuilder" class="mb-2"></div>
+                    <label class="form-label" for="ct-json">
+                        الشرط كـ JSON · what the server is handed
+                    </label>
+                    <textarea class="form-control rc-mono" id="ct-json" rows="7" spellcheck="false"></textarea>
+                    <div class="form-text">
+                        البنّاء أعلاه يكتب في هذا الصندوق. المثال المرفوض لا يمكن رسمه في
+                        البنّاء — الحقل الذي يرفضه السجل غير موجود في قوائمه، وهذا هو
+                        المقصود.
+                    </div>
                     <div class="d-flex gap-2 mt-2 flex-wrap">
                         <button class="btn btn-sm btn-primary" id="btn-validate" type="button">Validate</button>
                         <button class="btn btn-sm btn-outline-secondary" id="btn-sample-ok" type="button">

@@ -437,8 +437,26 @@ function csvFor(date) {
        draw an empty dropdown, which sends a blank condition — and the column
        is NOT NULL, so the DATABASE answered: "Cannot insert the value NULL
        into column 'ConditionJson'". */
-    check(/لا حقول متاحة/.test(await page.locator("#clBuilder").innerText()),
-        "the builder drew an empty field list instead of saying it has nothing to offer");
+    const dead = await page.locator("#clBuilder").innerText();
+    check(/لا يتشاركان/.test(dead),
+        `the builder did not say WHY it has nothing to offer: ${dead}`);
+    check(dead.includes("REF") && dead.includes("STMT_REF"),
+        "the message does not list what each side actually has");
+    check(!await page.locator("#clBuilder .rc-cb-head").isVisible(),
+        "the ALL/ANY head is still on screen with no condition row under it");
+
+    /* And the way out is a button, not advice: it moves the side picker, and
+       the builder comes back with that side's fields. */
+    await page.click('#clBuilder .rc-cb-pick[data-side="Left"]');
+    check(await page.locator("#clSide").inputValue() === "Left",
+        "the way-out button did not switch the side");
+
+    const offeredAfter = await page.locator("#clBuilder .rc-cb-field option")
+        .evaluateAll(options => options.map(o => o.value));
+    check(offeredAfter.includes("REF"),
+        `switching to Left did not bring the left side's fields back: ${offeredAfter.join(", ")}`);
+
+    await page.selectOption("#clSide", "Both");
 
     await page.fill("#clCode", "NO_CONDITION");
     await page.fill("#clName", "Saved with nothing to match on");

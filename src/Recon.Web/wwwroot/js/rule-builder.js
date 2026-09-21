@@ -309,6 +309,66 @@ jQuery(function ($) {
        condition tree. ReconConditions writes the same JSON into the same
        hidden input, so the validator and the compiler see what they always
        saw. */
+    /* ---- why a builder has nothing to offer ------------------------
+       Three different dead ends look identical on screen — a registry with
+       no field at all, a registry whose fields are all withheld from
+       matching, and a Both-sided rule whose two registries share no field
+       code. Each has a different way out, so each says its own. */
+    function sideOf(code) {
+        return code === config.right.code ? config.right : config.left;
+    }
+
+    function datasetsLink(side) {
+        return '<a href="' + config.datasetsUrl + '?id=' + side.id + '">'
+            + 'افتح سجل حقول ' + side.code + '</a>';
+    }
+
+    function codesOf(fields) {
+        return $.map($.grep(fields, function (f) { return f.matchable; }),
+            function (f) { return f.code; });
+    }
+
+    function explainOneSide(side) {
+        var matchable = codesOf(side.fields).length;
+
+        if (side.fields.length === 0) {
+            return 'سجل حقول <strong>' + side.code + '</strong> فارغ: لا حقل معرَّف فيه بعد. '
+                + datasetsLink(side) + ' وأضف الحقول أولاً.';
+        }
+
+        if (matchable === 0) {
+            return 'سجل حقول <strong>' + side.code + '</strong> فيه ' + side.fields.length
+                + ' حقلاً، ولا حقل منها مُعلَّم <strong>قابلاً للمطابقة</strong> — ولا يظهر في'
+                + ' القواعد إلا ما هو كذلك. ' + datasetsLink(side)
+                + ' وعلّم الحقول التي يُسمح ببناء قواعد عليها.';
+        }
+
+        return null;
+    }
+
+    function explainClassification() {
+        var chosen = $("#clSide").val();
+
+        if (chosen !== "Both") {
+            return explainOneSide(chosen === "Right" ? config.right : config.left);
+        }
+
+        var oneSided = explainOneSide(config.left) || explainOneSide(config.right);
+        if (oneSided) { return oneSided; }
+
+        // Both registries have matchable fields; they just share no code.
+        return 'الطرفان لا يتشاركان أيّ كود حقل، فلا يوجد شرط يستطيع الطرفان تقييمه.'
+            + ' الأيسر (<strong>' + config.left.code + '</strong>): '
+            + '<span class="rc-mono">' + codesOf(config.left.fields).join(", ") + '</span>.'
+            + ' الأيمن (<strong>' + config.right.code + '</strong>): '
+            + '<span class="rc-mono">' + codesOf(config.right.fields).join(", ") + '</span>.'
+            + ' الحلّ أن تصنعها مرّتين: '
+            + '<button type="button" class="btn btn-sm btn-outline-primary py-0 px-2 rc-cb-pick"'
+            + ' data-side="Left">قاعدة للطرف الأيسر</button> '
+            + '<button type="button" class="btn btn-sm btn-outline-primary py-0 px-2 rc-cb-pick"'
+            + ' data-side="Right">قاعدة للطرف الأيمن</button>';
+    }
+
     var exclusionFields = function () {
         var dataset = $("#exDataset").val();
         return dataset === config.right.code ? config.right.fields : config.left.fields;
@@ -317,7 +377,8 @@ jQuery(function ($) {
     var exBuilder = window.ReconConditions && window.ReconConditions.attach({
         container: "#exBuilder",
         hidden: "#exJson",
-        fields: exclusionFields()
+        fields: exclusionFields(),
+        nothing: function () { return explainOneSide(sideOf($("#exDataset").val())); }
     });
 
     if (exBuilder) {
@@ -376,10 +437,17 @@ jQuery(function ($) {
     var clBuilder = window.ReconConditions && window.ReconConditions.attach({
         container: "#clBuilder",
         hidden: "#clJson",
-        fields: classificationFields()
+        fields: classificationFields(),
+        nothing: explainClassification
     });
 
     if (clBuilder) {
+        // "Make it for the left side" has to actually move the side picker,
+        // or it is advice rather than a way out.
+        $("#clBuilder").on("click", ".rc-cb-pick", function () {
+            $("#clSide").val($(this).data("side")).trigger("change");
+        });
+
         $("#clSide").on("change", function () {
             clBuilder.fields(classificationFields());
 

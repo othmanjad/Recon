@@ -231,8 +231,13 @@ async function shot(page, name) {
     check(builtFilter === '{"op":"and","items":[{"field":"REF_PRIMARY","cmp":"isnotnull"}]}',
         `the filter builder wrote the wrong JSON: ${builtFilter}`);
 
+    /* The wait is armed BEFORE the click, not after: a validation that
+       answers in under a millisecond is answered before a wait registered
+       afterwards can see it, and the driver then fails on a screen that is
+       showing "Accepted". */
+    let answered = omar.waitForResponse(r => r.url().includes("ValidateFilter"), { timeout: 10000 });
     await omar.click("#btn-validate");
-    await omar.waitForResponse(r => r.url().includes("ValidateFilter"), { timeout: 5000 });
+    await answered;
     await omar.waitForTimeout(300);
     result = await omar.locator("#ct-result").innerText();
     check(/Accepted/.test(result),
@@ -240,8 +245,9 @@ async function shot(page, name) {
 
     // A valid filter, validated by the server.
     await omar.click("#btn-sample-ok");
+    answered = omar.waitForResponse(r => r.url().includes("ValidateFilter"), { timeout: 10000 });
     await omar.click("#btn-validate");
-    await omar.waitForResponse(r => r.url().includes("ValidateFilter"), { timeout: 5000 });
+    await answered;
     await omar.waitForTimeout(300);
     result = await omar.locator("#ct-result").innerText();
     check(/Accepted/.test(result), `a valid filter was not accepted (got "${result}")`);
@@ -434,8 +440,9 @@ async function shot(page, name) {
     await omar.goto(BASE + "/schedules", { waitUntil: "load" });
     await omar.fill("#cronExpression", "0 22 * * *");
     await omar.fill("#timeZone", "Asia/Amman");
+    const previewed = omar.waitForResponse(r => r.url().includes("Preview"), { timeout: 10000 });
     await omar.click("#rc-cron-preview");
-    await omar.waitForResponse(r => r.url().includes("Preview"), { timeout: 5000 });
+    await previewed;
     await omar.waitForTimeout(300);
 
     const preview = await omar.locator("#rc-cron-result").innerText();

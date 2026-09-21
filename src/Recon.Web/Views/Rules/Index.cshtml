@@ -1041,8 +1041,20 @@ else
         <script>
             window.ReconRules = {
                 definitionId: @definition.DefinitionId,
-                left: { code: @Json.Serialize(definition.Left.Code), fields: @Json.Serialize(Fields(definition.Left)) },
-                right: { code: @Json.Serialize(definition.Right.Code), fields: @Json.Serialize(Fields(definition.Right)) },
+                @* The dataset ids travel too: when a builder has no field to
+                   offer, the only useful thing to say is which registry to go
+                   and fix, as a link. *@
+                left: {
+                    code: @Json.Serialize(definition.Left.Code),
+                    id: @definition.Left.DatasetId,
+                    fields: @Json.Serialize(Fields(definition.Left))
+                },
+                right: {
+                    code: @Json.Serialize(definition.Right.Code),
+                    id: @definition.Right.DatasetId,
+                    fields: @Json.Serialize(Fields(definition.Right))
+                },
+                datasetsUrl: "@Url.Action("Index", "Datasets")",
                 comparisons: @Json.Serialize(Enum.GetNames<ComparisonType>()),
                 units: @Json.Serialize(Enum.GetNames<ToleranceUnit>()),
 

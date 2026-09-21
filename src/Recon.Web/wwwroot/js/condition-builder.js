@@ -81,8 +81,23 @@ window.ReconConditions = (function ($) {
         var api = {};
         var fields = options.fields || [];
 
+        /* What to say when there is no field to offer. The caller supplies it
+           because only the caller knows which dead end this is — and a dead
+           end the screen cannot name is one the person cannot get out of. */
+        function reason() {
+            var text = options.nothing ? options.nothing() : null;
+
+            return text || 'لا حقول متاحة لبناء شرط هنا: الحقل يظهر في هذه القائمة فقط'
+                + ' إذا كان مُعرَّفاً في سجل حقول المجموعة و<strong>قابلاً للمطابقة</strong>.';
+        }
+
+        /* The head, the rows and the add button live in one plain wrapper so
+           that hiding them is one call — and so that hiding them WORKS:
+           jQuery's .toggle() writes an inline display, which Bootstrap's
+           d-flex (display:flex !important) silently overrides. */
         $host.addClass("rc-cb").html(
-            '<div class="rc-cb-head d-flex align-items-center gap-2 flex-wrap mb-2" dir="rtl">'
+            '<div class="rc-cb-controls">'
+            + '<div class="rc-cb-head d-flex align-items-center gap-2 flex-wrap mb-2" dir="rtl">'
             + '  <span class="rc-help">يتحقق الشرط عندما</span>'
             + '  <select class="form-select form-select-sm rc-cb-op" style="width:auto">'
             + '    <option value="and">كل الشروط التالية · ALL</option>'
@@ -94,6 +109,7 @@ window.ReconConditions = (function ($) {
             + '<div class="d-flex align-items-center gap-2 mt-2 flex-wrap">'
             + '  <button class="btn btn-sm btn-outline-primary rc-cb-add" type="button">'
             + '    <i class="bi bi-plus-lg" aria-hidden="true"></i> أضف شرطاً</button>'
+            + '</div>'
             + '</div>'
             // The sentence gets a line of its own, labelled. It is the one
             // thing on the form that says what is about to be saved, and as a
@@ -209,16 +225,12 @@ window.ReconConditions = (function ($) {
             var empty = offered(fields).length === 0;
 
             $host.find(".rc-cb-empty").remove();
-            $host.find(".rc-cb-rows, .rc-cb-add, .rc-cb-head").toggle(!empty);
+            $host.find(".rc-cb-controls").toggle(!empty);
 
             if (empty) {
                 $rows.empty();
                 $host.prepend('<div class="alert alert-warning py-2 px-3 mb-2 small rc-cb-empty"'
-                    + ' dir="rtl" role="alert">'
-                    + 'لا حقول متاحة لبناء شرط هنا. الحقل يظهر في هذه القائمة فقط إذا كان'
-                    + ' مُعرَّفاً في سجل حقول المجموعة و<strong>قابلاً للمطابقة</strong>،'
-                    + ' وإذا كان الجانب «الطرفان» فلا بدّ أن يحمل الطرفان نفس كود الحقل.'
-                    + '</div>');
+                    + ' dir="rtl" role="alert">' + reason() + '</div>');
             }
 
             return empty;
@@ -269,6 +281,16 @@ window.ReconConditions = (function ($) {
 
                 if (!$select.val()) { $select.prop("selectedIndex", 0); }
             });
+
+            // Coming back from the empty state there is no row to update: it
+            // was removed when there was nothing to put in it, and a builder
+            // that returns to a side with fields and still shows none is a
+            // dead end the person was told they had escaped.
+            if (!$rows.find(".rc-cb-row").length) {
+                var $first = row();
+                $rows.append($first);
+                syncRow($first);
+            }
 
             publish();
         };

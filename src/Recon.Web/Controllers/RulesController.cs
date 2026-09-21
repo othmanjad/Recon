@@ -191,6 +191,22 @@ public sealed class RulesController(
             return RedirectToAction(nameof(Index), new { id = definitionId });
         }
 
+        /* An absent condition is valid to the validator, because an absent
+           ROW FILTER means "no filter" — but an exclusion is not a filter.
+           One with no condition would exclude the whole dataset, and the
+           column is NOT NULL, so without this the database answered instead
+           of the screen: "Cannot insert the value NULL into column
+           'ConditionJson'". */
+        if (string.IsNullOrWhiteSpace(conditionJson))
+        {
+            TempData["Error"] =
+                "An exclusion needs a condition. One with none would exclude every row in the " +
+                "dataset. Pick a field and a comparison in the condition builder — if its field " +
+                "list is empty, that dataset has no field marked matchable yet.";
+
+            return RedirectToAction(nameof(Index), new { id = definitionId });
+        }
+
         // The same gate the rule builder applies: the condition resolves
         // against that dataset's registry and never from free text.
         var result = ConditionValidator.ValidateJson(conditionJson, dataset);
@@ -301,6 +317,20 @@ public sealed class RulesController(
         var definition = await config.LoadDefinitionAsync(definitionId).ConfigureAwait(false);
         await access.RequireAsync(User, definition.CounterpartyId, AccessLevel.Configure)
             .ConfigureAwait(false);
+
+        /* Same as the exclusion above: no condition is not "no filter" here.
+           A classification with none would name every unmatched row, and the
+           column is NOT NULL, so the database was the one refusing it. */
+        if (string.IsNullOrWhiteSpace(conditionJson))
+        {
+            TempData["Error"] =
+                "A classification needs a condition. One with none would give this name to every " +
+                "unmatched row on that side. Pick a field and a comparison in the condition " +
+                "builder — if its field list is empty and the side is Both, the two sides share " +
+                "no field code, so the rule has to be made once per side instead.";
+
+            return RedirectToAction(nameof(Index), new { id = definitionId });
+        }
 
         // A rule that applies to both sides has to resolve against both
         // registries, and the two sides name nothing alike: a condition on

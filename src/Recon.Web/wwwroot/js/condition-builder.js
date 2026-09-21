@@ -51,13 +51,16 @@ window.ReconConditions = (function ($) {
        server accepts would be a form that teaches people to be refused. */
     function fieldOptions(fields, selected) {
         var html = "";
-        $.each(fields, function (_, f) {
-            if (f.matchable === false) { return; }
+        $.each(offered(fields), function (_, f) {
             html += '<option value="' + escape(f.code) + '"'
                 + (f.code === selected ? " selected" : "") + ">"
                 + escape(f.label) + " (" + escape(f.code) + ")</option>";
         });
         return html;
+    }
+
+    function offered(fields) {
+        return $.grep(fields || [], function (f) { return f.matchable !== false; });
     }
 
     function operatorOptions(selected) {
@@ -168,7 +171,11 @@ window.ReconConditions = (function ($) {
         }
 
         function sentence(built) {
-            if (!built.items.length) { return "لم تُضف شروط بعد"; }
+            // Not "nothing yet": nothing is a refusal on save, and the line
+            // that reads the condition out is where that belongs.
+            if (!built.items.length) {
+                return "لا شرط بعد — والحفظ سيُرفَض: قاعدة بلا شرط تنطبق على كل صفّ.";
+            }
 
             var joiner = built.op === "or" ? " أو " : " و ";
 
@@ -192,8 +199,35 @@ window.ReconConditions = (function ($) {
 
         api.publish = publish;
 
+        /* No field to offer is a state, not an empty list. It happens when a
+           dataset has nothing marked matchable yet, and when the side is Both
+           and the two registries share no field code — and a builder that
+           draws an empty dropdown for it sends a blank condition the server
+           then has to refuse. So it says so, and hides the controls that
+           cannot work. */
+        function sayIfNothingToOffer() {
+            var empty = offered(fields).length === 0;
+
+            $host.find(".rc-cb-empty").remove();
+            $host.find(".rc-cb-rows, .rc-cb-add, .rc-cb-head").toggle(!empty);
+
+            if (empty) {
+                $rows.empty();
+                $host.prepend('<div class="alert alert-warning py-2 px-3 mb-2 small rc-cb-empty"'
+                    + ' dir="rtl" role="alert">'
+                    + 'لا حقول متاحة لبناء شرط هنا. الحقل يظهر في هذه القائمة فقط إذا كان'
+                    + ' مُعرَّفاً في سجل حقول المجموعة و<strong>قابلاً للمطابقة</strong>،'
+                    + ' وإذا كان الجانب «الطرفان» فلا بدّ أن يحمل الطرفان نفس كود الحقل.'
+                    + '</div>');
+            }
+
+            return empty;
+        }
+
         api.load = function (json) {
             $rows.empty();
+
+            if (sayIfNothingToOffer()) { publish(); return; }
 
             var parsed = null;
             try { parsed = json ? JSON.parse(json) : null; } catch (e) { parsed = null; }
@@ -224,6 +258,8 @@ window.ReconConditions = (function ($) {
 
         api.fields = function (next) {
             fields = next || [];
+
+            if (sayIfNothingToOffer()) { publish(); return; }
 
             // Keep what still exists on the new side, drop what does not.
             $rows.find(".rc-cb-row").each(function () {

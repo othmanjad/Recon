@@ -433,6 +433,38 @@ function csvFor(date) {
     check(/المشتركة بين الطرفين/.test(await page.locator("#rc-classification-form").innerText()),
         "the screen does not explain why the Both field list is narrower");
 
+    /* Nothing to offer is a state the builder has to say out loud. It used to
+       draw an empty dropdown, which sends a blank condition — and the column
+       is NOT NULL, so the DATABASE answered: "Cannot insert the value NULL
+       into column 'ConditionJson'". */
+    check(/لا حقول متاحة/.test(await page.locator("#clBuilder").innerText()),
+        "the builder drew an empty field list instead of saying it has nothing to offer");
+
+    await page.fill("#clCode", "NO_CONDITION");
+    await page.fill("#clName", "Saved with nothing to match on");
+    await page.fill("#clSeq", "8");
+    await submit(page, page.locator('form[action*="/Rules/SaveClassification"] button[type="submit"]'), 60000);
+
+    body = await page.locator("body").innerText();
+    check(/A classification needs a condition/.test(body),
+        `a classification with no condition was not refused by the screen: ${firstAlert(body)}`);
+    check(!/Cannot insert the value NULL/.test(body),
+        "the database answered a blank condition instead of the screen");
+
+    // The same hole on the exclusion form, reached by emptying the builder.
+    await page.goto(`${BASE}/rules?id=${definitionId}`, { waitUntil: "load" });
+    await page.fill("#exName", "No condition either");
+    await page.fill("#exReason", "NONE");
+    await page.locator("#exBuilder .rc-cb-row").evaluateAll(rows => rows.forEach(r => r.remove()));
+    await submit(page, page.locator('form[action*="/Rules/SaveExclusion"] button[type="submit"]'), 60000);
+
+    body = await page.locator("body").innerText();
+    check(/An exclusion needs a condition/.test(body),
+        `an exclusion with no condition was not refused by the screen: ${firstAlert(body)}`);
+
+    await page.goto(`${BASE}/rules?id=${definitionId}`, { waitUntil: "load" });
+    await page.selectOption("#clSide", "Both");
+
     await page.fill("#clCode", "BOTH_SIDES");
     await page.fill("#clName", "Applies to both");
     await page.fill("#clSeq", "9");
